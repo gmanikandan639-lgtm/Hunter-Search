@@ -65,35 +65,35 @@ const getEnv = (key: string): string => {
 
 export const firebaseConfig = {
   projectId:
-    getEnv('VITE_FIREBASE_PROJECT_ID') ||
     firebaseConfigJson?.projectId ||
-    '',
+    getEnv('VITE_FIREBASE_PROJECT_ID') ||
+    'fraudriskhub-44639',
   appId:
-    getEnv('VITE_FIREBASE_APP_ID') ||
     firebaseConfigJson?.appId ||
-    '',
+    getEnv('VITE_FIREBASE_APP_ID') ||
+    '1:880812568591:web:3033cfc6f477247fed337a',
   apiKey:
-    getEnv('VITE_FIREBASE_API_KEY') ||
     firebaseConfigJson?.apiKey ||
-    '',
+    getEnv('VITE_FIREBASE_API_KEY') ||
+    'AIzaSyBDDN3pQECq6xgk6xlFt4N76b61fsSzU3g',
   authDomain:
-    getEnv('VITE_FIREBASE_AUTH_DOMAIN') ||
     firebaseConfigJson?.authDomain ||
-    '',
+    getEnv('VITE_FIREBASE_AUTH_DOMAIN') ||
+    'fraudriskhub-44639.firebaseapp.com',
   storageBucket:
-    getEnv('VITE_FIREBASE_STORAGE_BUCKET') ||
     firebaseConfigJson?.storageBucket ||
-    '',
+    getEnv('VITE_FIREBASE_STORAGE_BUCKET') ||
+    'fraudriskhub-44639.firebasestorage.app',
   messagingSenderId:
-    getEnv('VITE_FIREBASE_MESSAGING_SENDER_ID') ||
     firebaseConfigJson?.messagingSenderId ||
-    '',
+    getEnv('VITE_FIREBASE_MESSAGING_SENDER_ID') ||
+    '880812568591',
 };
 
 export const customDatabaseId =
-  getEnv('VITE_FIREBASE_DATABASE_ID') ||
   firebaseConfigJson?.firestoreDatabaseId ||
-  '';
+  getEnv('VITE_FIREBASE_DATABASE_ID') ||
+  'ai-studio-fraudriskhub-1bc1949c-52b4-459b-8fe4-430de62c4958';
 
 // Detect if Firebase is configured with active credentials
 export const isFirebaseConfigured = Boolean(
@@ -504,10 +504,14 @@ export const subscribeToManualHunterRecords = (
     }
   } catch (e) {}
 
-  // 2. Attach Firestore Real-Time Listener
+  // 2. Attach Firestore Real-Time Listener on auth state change
   const attachFirestoreListener = () => {
     if (isCancelled || !isFirebaseConfigured) return;
     try {
+      if (unsubscribeSnapshot) {
+        unsubscribeSnapshot();
+        unsubscribeSnapshot = null;
+      }
       const q = query(collection(db, MANUAL_IDENTIFIERS_COLLECTION));
       unsubscribeSnapshot = onSnapshot(
         q,
@@ -515,14 +519,17 @@ export const subscribeToManualHunterRecords = (
         (snapshot) => {
           snapshot.forEach((docSnap) => {
             const data = docSnap.data();
+            const idVal = (data.identifier || data.hunterId || docSnap.id || '').toString().trim();
             const rec: ManualHunterRecord = {
               id: docSnap.id,
-              hunterId: data.hunterId || '',
+              hunterId: idVal,
+              identifier: idVal,
               bankName: data.bankName || '',
-              name: data.name || data.hunterId || '',
+              name: data.name || data.details || idVal,
               status: data.status || 'Active Reference',
-              remarks: data.remarks || data.notes || '',
-              notes: data.notes || data.remarks || '',
+              details: data.details || data.remarks || data.notes || 'Manual Identifier Record',
+              remarks: data.remarks || data.details || data.notes || '',
+              notes: data.notes || data.remarks || data.details || '',
               accountNumber: data.accountNumber || '',
               mobile: data.mobile || '',
               pan: data.pan || '',
@@ -565,7 +572,17 @@ export const subscribeToManualHunterRecords = (
     }
   };
 
-  attachFirestoreListener();
+  // Attach immediately if user is already authenticated
+  if (auth.currentUser) {
+    attachFirestoreListener();
+  }
+
+  // Also listen to auth changes: when a user logs in, immediately attach listener
+  const unsubAuth = onAuthStateChanged(auth, (user) => {
+    if (user && !isCancelled) {
+      attachFirestoreListener();
+    }
+  });
 
   // 3. Connect to Server-Sent Events (SSE) for multi-client push
   try {
@@ -674,6 +691,9 @@ export const subscribeToManualHunterRecords = (
 
   return () => {
     isCancelled = true;
+    if (unsubAuth) {
+      unsubAuth();
+    }
     if (unsubscribeSnapshot) {
       unsubscribeSnapshot();
     }
@@ -733,22 +753,22 @@ export const normalizeIdentifier = (raw: string): NormalizedIdentifier => {
 export const addManualHunterRecordToFirestore = async (
   record: Omit<ManualHunterRecord, 'id'> & { id?: string }
 ): Promise<string> => {
-  const rawId = record.hunterId || (record as any).identifier || '';
+  const rawId = (record.hunterId || (record as any).identifier || '').toString().trim();
   const norm = normalizeIdentifier(rawId);
   const docId = record.id || `manual-${norm.clean || Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
   const recordDoc = doc(db, MANUAL_IDENTIFIERS_COLLECTION, docId);
-  const fallbackRecordDoc = doc(db, MANUAL_COLLECTION, docId);
   const now = new Date().toISOString();
 
   const payload: any = {
     ...record,
     id: docId,
     identifier: rawId || docId,
+    hunterId: rawId || docId,
     identifierLower: norm.lower,
     identifierClean: norm.clean,
     identifierPrefixes: norm.prefixes,
     bankName: record.bankName || 'Unknown Bank',
-    details: record.name || record.remarks || record.notes || 'Manual Identifier Record',
+    details: record.details || record.name || record.remarks || record.notes || 'Manual Identifier Record',
     source: 'manual_identifiers',
     isCsvImport: false,
     createdBy: record.createdBy || auth.currentUser?.email || 'Admin',
@@ -779,10 +799,7 @@ export const addManualHunterRecordToFirestore = async (
   if (isFirebaseConfigured) {
     try {
       const cleanData = cleanForFirestore({ ...payload, serverTime: serverTimestamp() });
-      await Promise.all([
-        setDoc(recordDoc, cleanData, { merge: true }),
-        setDoc(fallbackRecordDoc, cleanData, { merge: true }),
-      ]);
+      await setDoc(recordDoc, cleanData, { merge: true });
     } catch (err) {
       console.warn('Firestore write notice:', err);
     }
@@ -943,7 +960,6 @@ export const approveUserHunterSubmissionInFirestore = async (
   // If this was an update to an existing target record, update the target record in Firestore too
   if (adjustedData?.targetRecordId && adjustedData.targetRecordId !== submissionId) {
     const targetDoc = doc(db, MANUAL_IDENTIFIERS_COLLECTION, adjustedData.targetRecordId);
-    const targetFallbackDoc = doc(db, MANUAL_COLLECTION, adjustedData.targetRecordId);
     try {
       const targetPayload = cleanForFirestore({
         ...adjustedData,
@@ -951,10 +967,7 @@ export const approveUserHunterSubmissionInFirestore = async (
         updatedBy: `Approved from user submission by ${adminName}`,
         serverTime: serverTimestamp(),
       });
-      await Promise.all([
-        setDoc(targetDoc, targetPayload, { merge: true }),
-        setDoc(targetFallbackDoc, targetPayload, { merge: true }),
-      ]);
+      await setDoc(targetDoc, targetPayload, { merge: true });
     } catch (e) {
       console.warn('Target record update warning:', e);
     }
@@ -962,10 +975,7 @@ export const approveUserHunterSubmissionInFirestore = async (
 
   try {
     const cleanUpdate = cleanForFirestore({ ...updatePayload, serverTime: serverTimestamp() });
-    await Promise.all([
-      setDoc(recordDoc, cleanUpdate, { merge: true }),
-      setDoc(fallbackRecordDoc, cleanUpdate, { merge: true }),
-    ]);
+    await setDoc(recordDoc, cleanUpdate, { merge: true });
   } catch (e) {
     console.warn('Approve submission firestore error:', e);
   }
@@ -980,7 +990,6 @@ export const rejectUserHunterSubmissionInFirestore = async (
   rejectionReason: string
 ): Promise<void> => {
   const recordDoc = doc(db, MANUAL_IDENTIFIERS_COLLECTION, submissionId);
-  const fallbackRecordDoc = doc(db, MANUAL_COLLECTION, submissionId);
   const now = new Date().toISOString();
 
   const updatePayload: Partial<ManualHunterRecord> = {
@@ -1016,10 +1025,7 @@ export const rejectUserHunterSubmissionInFirestore = async (
 
   try {
     const cleanUpdate = cleanForFirestore({ ...updatePayload, serverTime: serverTimestamp() });
-    await Promise.all([
-      setDoc(recordDoc, cleanUpdate, { merge: true }),
-      setDoc(fallbackRecordDoc, cleanUpdate, { merge: true }),
-    ]);
+    await setDoc(recordDoc, cleanUpdate, { merge: true });
   } catch (e) {
     console.warn('Reject submission firestore error:', e);
   }
@@ -1033,12 +1039,21 @@ export const updateManualHunterRecordInFirestore = async (
   data: Partial<ManualHunterRecord>
 ): Promise<void> => {
   const recordDoc = doc(db, MANUAL_IDENTIFIERS_COLLECTION, recordId);
-  const fallbackRecordDoc = doc(db, MANUAL_COLLECTION, recordId);
   const now = new Date().toISOString();
+
+  const rawId = (data.hunterId || (data as any).identifier || '').toString().trim();
+  const norm = rawId ? normalizeIdentifier(rawId) : null;
 
   const payload = cleanForFirestore({
     ...data,
     id: recordId,
+    ...(rawId ? {
+      identifier: rawId,
+      hunterId: rawId,
+      identifierLower: norm?.lower,
+      identifierClean: norm?.clean,
+      identifierPrefixes: norm?.prefixes,
+    } : {}),
     updatedAt: now,
     serverTime: serverTimestamp(),
   });
@@ -1059,10 +1074,7 @@ export const updateManualHunterRecordInFirestore = async (
 
   if (isFirebaseConfigured) {
     try {
-      await Promise.all([
-        setDoc(recordDoc, payload, { merge: true }),
-        setDoc(fallbackRecordDoc, payload, { merge: true }),
-      ]);
+      await setDoc(recordDoc, payload, { merge: true });
     } catch (err) {
       console.warn('Firestore update notice:', err);
     }
@@ -1076,7 +1088,6 @@ export const deleteManualHunterRecordFromFirestore = async (
   recordId: string
 ): Promise<void> => {
   const recordDoc = doc(db, MANUAL_IDENTIFIERS_COLLECTION, recordId);
-  const fallbackRecordDoc = doc(db, MANUAL_COLLECTION, recordId);
 
   // Local update
   try {
@@ -1099,10 +1110,7 @@ export const deleteManualHunterRecordFromFirestore = async (
 
   if (isFirebaseConfigured) {
     try {
-      await Promise.all([
-        deleteDoc(recordDoc),
-        deleteDoc(fallbackRecordDoc),
-      ]);
+      await deleteDoc(recordDoc);
     } catch (err) {
       console.warn('Firestore delete notice:', err);
     }
@@ -1474,7 +1482,12 @@ export const searchBothHunterCollections = async (
   const manualCol = collection(db, 'manual_identifiers');
 
   manualQueries.push(getDocs(query(manualCol, where('identifier', '==', queryText), limit(25))).catch(() => null));
+  manualQueries.push(getDocs(query(manualCol, where('hunterId', '==', queryText), limit(25))).catch(() => null));
   manualQueries.push(getDocs(query(manualCol, where('identifierLower', '==', norm.lower), limit(25))).catch(() => null));
+  manualQueries.push(getDocs(query(manualCol, where('hunterId', '==', norm.lower), limit(25))).catch(() => null));
+  if (norm.clean) {
+    manualQueries.push(getDocs(query(manualCol, where('identifierClean', '==', norm.clean), limit(25))).catch(() => null));
+  }
   manualQueries.push(
     getDocs(
       query(
@@ -1485,6 +1498,8 @@ export const searchBothHunterCollections = async (
       )
     ).catch(() => null)
   );
+  // Also query recent manual_identifiers so partial token, details, and bank searches find them
+  manualQueries.push(getDocs(query(manualCol, limit(100))).catch(() => null));
 
   const [hunterSnaps, manualSnaps] = await Promise.all([
     Promise.all(hunterQueries),
@@ -1498,22 +1513,33 @@ export const searchBothHunterCollections = async (
     if (snap && snap.docs) {
       snap.docs.forEach((docSnap: any) => {
         const data = docSnap.data();
-        const idKey = docSnap.id || data.identifier || data.hunterId;
+        const idVal = (data.identifier || data.hunterId || docSnap.id || '').toString().trim();
+        const idKey = docSnap.id || idVal;
         if (!rawMatches.has(idKey)) {
-          rawMatches.set(idKey, { ...data, id: docSnap.id, _collection: 'hunter_records' });
+          rawMatches.set(idKey, { ...data, id: docSnap.id, identifier: idVal, hunterId: idVal, _collection: 'hunter_records' });
         }
       });
     }
   }
 
-  // Collect matching docs from manual_identifiers
+  // Collect matching docs from manual_identifiers (SHARED DATA for all users)
   for (const snap of manualSnaps) {
     if (snap && snap.docs) {
       snap.docs.forEach((docSnap: any) => {
         const data = docSnap.data();
-        const idKey = docSnap.id || data.identifier || data.hunterId;
+        const idVal = (data.identifier || data.hunterId || docSnap.id || '').toString().trim();
+        const idKey = docSnap.id || idVal;
         if (!rawMatches.has(idKey)) {
-          rawMatches.set(idKey, { ...data, id: docSnap.id, _collection: 'manual_identifiers' });
+          rawMatches.set(idKey, {
+            ...data,
+            id: docSnap.id,
+            identifier: idVal,
+            hunterId: idVal,
+            bankName: data.bankName || '',
+            details: data.details || data.name || data.remarks || data.notes || '',
+            _collection: 'manual_identifiers',
+            source: 'manual_identifiers',
+          });
         }
       });
     }
@@ -1522,7 +1548,8 @@ export const searchBothHunterCollections = async (
   // Also include matching records from real-time onSnapshot listener memory
   // This guarantees that when an admin adds/edits a manual record, normal users see it instantly!
   for (const m of localManualRecords) {
-    const rawId = m.hunterId || (m as any).identifier || '';
+    if (m.approvalStatus === 'rejected') continue;
+    const rawId = (m.hunterId || (m as any).identifier || m.id || '').toString().trim();
     const mLower = rawId.toLowerCase();
     const mClean = mLower.replace(/[^a-z0-9]/g, '');
 
@@ -1532,7 +1559,9 @@ export const searchBothHunterCollections = async (
       mLower.startsWith(norm.lower) ||
       mLower.includes(norm.lower) ||
       (norm.clean && mClean.includes(norm.clean)) ||
-      norm.lower.includes(mLower);
+      norm.lower.includes(mLower) ||
+      (m.bankName && m.bankName.toLowerCase().includes(norm.lower)) ||
+      (m.details && m.details.toLowerCase().includes(norm.lower));
 
     if (isMatch) {
       const idKey = m.id || rawId;
@@ -1544,7 +1573,7 @@ export const searchBothHunterCollections = async (
           identifierLower: mLower,
           identifierClean: mClean,
           bankName: m.bankName,
-          details: m.name || m.remarks || m.notes || 'Manual Identifier Record',
+          details: m.details || m.name || m.remarks || m.notes || 'Manual Identifier Record',
           source: 'manual_identifiers',
           _collection: 'manual_identifiers',
           notes: m.notes || m.remarks,

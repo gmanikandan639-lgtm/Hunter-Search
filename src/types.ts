@@ -112,8 +112,10 @@ export interface SubmitterInfo {
 export interface ManualHunterRecord {
   id: string;
   hunterId: string;
+  identifier?: string;
   bankName: string;
   name: string;
+  details?: string;
   status: string;
   remarks: string;
   notes?: string;

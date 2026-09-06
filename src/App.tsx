@@ -131,34 +131,39 @@ export default function App() {
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [isUploading, setIsUploading] = useState<boolean>(false);
 
-  // Combined Active Search Set: CSV Records + Approved Manual Records
-  // ONLY records with status 'approved' (or legacy admin records) appear in search!
+  // Combined Active Search Set: CSV Records + Shared Manual Records
+  // All manual records from manual_identifiers are shared Hunter data
   const combinedRecords = useMemo(() => {
-    const approvedManual = manualRecords.filter(
-      (m) => m.approvalStatus === 'approved' || !m.approvalStatus
+    const activeManual = manualRecords.filter(
+      (m) => m.approvalStatus !== 'rejected'
     );
 
-    const manualRecordItems: RecordItem[] = approvedManual.map((m) => ({
-      id: m.id,
-      hunterId: m.hunterId,
-      name: m.name || m.hunterId,
-      bankName: m.bankName,
-      accountNumber: m.accountNumber || '',
-      mobile: m.mobile || '',
-      pan: m.pan || '',
-      status: m.status || 'Active Reference',
-      notes: m.remarks || m.notes || 'Registered Hunter Record',
-      uploadedBy: m.submittedBy?.name || m.createdBy || 'Administrator',
-      uploadDate: m.submittedAt || m.createdAt || '',
-      lastUpdated: m.updatedAt || m.createdAt || '',
-      rawColumns: {
-        'Hunter Identification Number': m.hunterId,
-        'Bank/NBFC Name': m.bankName,
-        'Status': m.status || '',
-        'Remarks': m.remarks || m.notes || '',
-        ...(m.rawColumns || {}),
-      },
-    }));
+    const manualRecordItems: RecordItem[] = activeManual.map((m) => {
+      const idVal = (m.hunterId || (m as any).identifier || m.id || '').toString().trim();
+      return {
+        id: m.id,
+        hunterId: idVal,
+        identifier: idVal,
+        name: m.name || m.details || idVal,
+        bankName: m.bankName || 'Unknown Financial Institution',
+        details: m.details || m.remarks || m.notes || 'Manual Identifier Record',
+        accountNumber: m.accountNumber || '',
+        mobile: m.mobile || '',
+        pan: m.pan || '',
+        status: m.status || 'Active Reference',
+        notes: m.remarks || m.notes || m.details || 'Registered Hunter Record',
+        uploadedBy: m.submittedBy?.name || m.createdBy || 'Administrator',
+        uploadDate: m.submittedAt || m.createdAt || '',
+        lastUpdated: m.updatedAt || m.createdAt || '',
+        rawColumns: {
+          'Hunter Identification Number': idVal,
+          'Bank/NBFC Name': m.bankName,
+          'Status': m.status || '',
+          'Remarks': m.remarks || m.notes || m.details || '',
+          ...(m.rawColumns || {}),
+        },
+      };
+    });
 
     return [...manualRecordItems, ...records];
   }, [records, manualRecords]);
