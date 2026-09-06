@@ -1,0 +1,7 @@
+{
+  "name": "Fraud Risk Hub",
+  "description": "Enterprise similarity matching and fraud risk verification platform for Banking, NBFC, RCU, and FCU teams - Detect, Analyze, Prevent.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

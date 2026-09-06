@@ -1,0 +1,99 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper function: Check if user is authenticated via Firebase Auth
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Helper function: Check if user is the document owner
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Admin authorization: checks users/{uid}.role field or super-admin email
+    function isAdmin() {
+      return isAuthenticated() && (
+        (request.auth.token.email != null && request.auth.token.email == 'gmanikandan639@gmail.com') ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
+      );
+    }
+
+    // 1. users Collection
+    // Document ID: Firebase Authentication UID (users/{uid})
+    // Fields: uid, name, email, photoURL, role ("admin" | "user"), createdAt, updatedAt
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      // Normal users can create their own profile with role 'user'
+      allow create: if isOwner(userId) && (
+        !('role' in request.resource.data) ||
+        request.resource.data.role == 'user' ||
+        isAdmin()
+      );
+      // Normal users CANNOT modify the 'role' field
+      allow update: if (
+        isOwner(userId) &&
+        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['role']))
+      ) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // 2. hunter_records Collection
+    // Imported from CSV / reference datasets
+    // Authenticated users can READ. Normal users CANNOT modify.
+    // Admin users have full CREATE, UPDATE, DELETE permissions.
+    match /hunter_records/{recordId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // 3. manual_identifiers Collection
+    // Manually added by Admin; preserved across CSV replacements
+    // Authenticated users can READ. Normal users CANNOT modify.
+    // Admin users have full CREATE, UPDATE, DELETE permissions.
+    match /manual_identifiers/{recordId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // 4. csv_metadata Collection
+    // Tracks CSV dataset uploads, filenames, record counts, and status
+    // Authenticated users can READ.
+    // Admin users have full CREATE, UPDATE, DELETE permissions.
+    match /csv_metadata/{metaId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Connection Test Collection (Used for live diagnostics)
+    match /connection_test/{document} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // Admins mapping
+    match /admins/{adminId} {
+      allow read: if isOwner(adminId) || isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // Active reference dataset bundle
+    match /csv_datasets/{datasetId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // Search History Audit Trail
+    match /search_history/{searchId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isAdmin();
+    }
+
+    // Visitor Statistics
+    match /visitor_stats/{statId} {
+      allow read, write: if isAuthenticated();
+    }
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "entities": {
+    "users": {
+      "description": "Authenticated user profiles with role-based access control",
+      "fields": {
+        "uid": { "type": "string", "description": "Firebase Authentication UID" },
+        "name": { "type": "string", "description": "User display name" },
+        "email": { "type": "string", "description": "User email address" },
+        "photoURL": { "type": "string", "description": "User avatar photo URL" },
+        "role": { "type": "string", "description": "Authorization role: 'admin' or 'user'" },
+        "createdAt": { "type": "string", "description": "Creation ISO timestamp" },
+        "updatedAt": { "type": "string", "description": "Update ISO timestamp" }
+      }
+    },
+    "hunter_records": {
+      "description": "Hunter Search records imported from CSV / reference datasets",
+      "fields": {
+        "identifier": { "type": "string", "description": "Hunter ID, PAN, Mobile, Account, or Tax identifier" },
+        "bankName": { "type": "string", "description": "Originating financial institution or bank" },
+        "details": { "type": "string", "description": "Entity name, match details, or risk notes" },
+        "source": { "type": "string", "description": "Import source or filename" },
+        "createdBy": { "type": "string", "description": "Admin UID or email who imported data" },
+        "createdAt": { "type": "string", "description": "Creation ISO timestamp" },
+        "updatedAt": { "type": "string", "description": "Update ISO timestamp" }
+      }
+    },
+    "manual_identifiers": {
+      "description": "Manual risk identifiers added and maintained by Admin, preserved across CSV replacements",
+      "fields": {
+        "identifier": { "type": "string", "description": "Hunter ID or manual identifier" },
+        "bankName": { "type": "string", "description": "Institution name" },
+        "details": { "type": "string", "description": "Record details, remarks, or entity name" },
+        "createdBy": { "type": "string", "description": "Admin UID or email who created identifier" },
+        "createdAt": { "type": "string", "description": "Creation ISO timestamp" },
+        "updatedAt": { "type": "string", "description": "Update ISO timestamp" }
+      }
+    },
+    "csv_metadata": {
+      "description": "Metadata for imported CSV datasets",
+      "fields": {
+        "fileName": { "type": "string", "description": "CSV dataset file name" },
+        "uploadedBy": { "type": "string", "description": "Admin email or UID who uploaded" },
+        "uploadedAt": { "type": "string", "description": "Upload ISO timestamp" },
+        "recordCount": { "type": "number", "description": "Total records imported" },
+        "status": { "type": "string", "description": "Status (active, replaced, archived)" }
+      }
+    },
+    "connection_test": {
+      "description": "Temporary verification documents for testing live Firestore communication",
+      "fields": {
+        "test": { "type": "boolean", "description": "Verification flag" },
+        "message": { "type": "string", "description": "Connection test status message" },
+        "timestamp": { "type": "string", "description": "Timestamp of test execution" }
+      }
+    }
+  }
+}
