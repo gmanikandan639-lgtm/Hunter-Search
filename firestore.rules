@@ -24,18 +24,53 @@ service cloud.firestore {
       );
     }
 
-    // 1. users Collection
-    // Document ID: Firebase Authentication UID (users/{uid})
-    // Fields: uid, name, email, photoURL, role ("admin" | "user"), createdAt, updatedAt
+    // 1. live_identifiers Collection (Master Public Searchable Database)
+    // Public users (no login required) can read approved/live identifiers.
+    // Normal/unauthenticated users CANNOT create, update, or delete live identifiers.
+    // Admin users have full CREATE, UPDATE, DELETE permissions.
+    match /live_identifiers/{recordId} {
+      allow read: if resource == null || resource.data.status in ['approved', 'live'] || isAdmin();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // 2. submissions Collection (Public Contributions & Proposals)
+    // Public users (unauthenticated, request.auth may be null) can CREATE pending submissions only.
+    // Public users CANNOT read other users' submissions, cannot modify after submission, cannot approve.
+    // Admin users can read, review, approve, update, and reject submissions.
+    match /submissions/{submissionId} {
+      // Only Admin can read submissions
+      allow read: if isAdmin();
+
+      // Public users (or admins) can create submissions:
+      // Validates: status must be 'pending', identifier non-empty, normalizedIdentifier present,
+      // and admin approval fields CANNOT be set by public users.
+      allow create: if (
+        request.resource.data.status == 'pending' &&
+        request.resource.data.identifier is string &&
+        request.resource.data.identifier.size() > 0 &&
+        request.resource.data.normalizedIdentifier is string &&
+        request.resource.data.normalizedIdentifier.size() > 0 &&
+        (!('approvedBy' in request.resource.data) || request.resource.data.approvedBy == null) &&
+        (!('approvedAt' in request.resource.data) || request.resource.data.approvedAt == null) &&
+        (!('reviewedBy' in request.resource.data) || request.resource.data.reviewedBy == null) &&
+        (!('reviewedAt' in request.resource.data) || request.resource.data.reviewedAt == null) &&
+        (!('rejectionReason' in request.resource.data) || request.resource.data.rejectionReason == null)
+      ) || isAdmin();
+
+      // Only Admin can update or delete submissions
+      allow update, delete: if isAdmin();
+    }
+
+    // 3. users Collection (Admin Profiles & RBAC)
+    // Normal public users do not have access.
+    // Authenticated users can view their own profile; Admins have full access.
     match /users/{userId} {
       allow read: if isOwner(userId) || isAdmin();
-      // Normal users can create their own profile with role 'user'
       allow create: if isOwner(userId) && (
         !('role' in request.resource.data) ||
         request.resource.data.role == 'user' ||
         isAdmin()
       );
-      // Normal users CANNOT modify the 'role' field
       allow update: if (
         isOwner(userId) &&
         (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['role']))
@@ -43,60 +78,52 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    // 2. hunter_records Collection
-    // Imported from CSV / reference datasets
-    // Authenticated users can READ. Normal users CANNOT modify.
-    // Admin users have full CREATE, UPDATE, DELETE permissions.
+    // 4. Existing Data Preservation: hunter_records Collection
+    // Public can read to search existing datasets; Admin manages.
     match /hunter_records/{recordId} {
-      allow read: if isAuthenticated();
+      allow read: if resource == null || resource.data.status in ['approved', 'live', null] || isAdmin();
       allow create, update, delete: if isAdmin();
     }
 
-    // 3. manual_identifiers Collection
-    // Manually added by Admin; preserved across CSV replacements
-    // Authenticated users can READ. Normal users CANNOT modify.
-    // Admin users have full CREATE, UPDATE, DELETE permissions.
+    // 5. Existing Data Preservation: manual_identifiers Collection
+    // Public can read approved manual records; Admin manages.
     match /manual_identifiers/{recordId} {
-      allow read: if isAuthenticated();
+      allow read: if resource == null || resource.data.status in ['approved', 'live', null] || isAdmin();
       allow create, update, delete: if isAdmin();
     }
 
-    // 4. csv_metadata Collection
-    // Tracks CSV dataset uploads, filenames, record counts, and status
-    // Authenticated users can READ.
-    // Admin users have full CREATE, UPDATE, DELETE permissions.
+    // 6. csv_metadata Collection
+    // Tracks CSV exports and metadata. Public can read active metadata; Admin can write.
     match /csv_metadata/{metaId} {
-      allow read: if isAuthenticated();
+      allow read: if true;
       allow create, update, delete: if isAdmin();
     }
 
-    // Connection Test Collection (Used for live diagnostics)
+    // 7. Connection Diagnostics Test Collection
     match /connection_test/{document} {
-      allow read, write: if isAuthenticated();
+      allow read, write: if true;
     }
 
-    // Admins mapping
+    // 8. Search History & Visitor Stats
+    match /search_history/{searchId} {
+      allow read: if isAdmin();
+      allow create: if true;
+      allow update, delete: if isAdmin();
+    }
+
+    match /visitor_stats/{statId} {
+      allow read, write: if true;
+    }
+
+    // 9. Admins mapping & csv_datasets
     match /admins/{adminId} {
       allow read: if isOwner(adminId) || isAdmin();
       allow write: if isAdmin();
     }
 
-    // Active reference dataset bundle
     match /csv_datasets/{datasetId} {
-      allow read: if isAuthenticated();
+      allow read: if true;
       allow write: if isAdmin();
-    }
-
-    // Search History Audit Trail
-    match /search_history/{searchId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
-      allow update, delete: if isAdmin();
-    }
-
-    // Visitor Statistics
-    match /visitor_stats/{statId} {
-      allow read, write: if isAuthenticated();
     }
   }
 }

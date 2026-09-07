@@ -121,7 +121,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [isAddRecordModalOpen, setIsAddRecordModalOpen] = useState<boolean>(false);
   const [editingManualRecord, setEditingManualRecord] = useState<ManualHunterRecord | null>(null);
 
-  // Status breakdown of manual records
+  // Status breakdown of manual records & submissions
   const pendingSubmissions = useMemo(
     () => manualRecords.filter((r) => r.approvalStatus === 'pending'),
     [manualRecords]
@@ -129,6 +129,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const approvedManualRecords = useMemo(
     () => manualRecords.filter((r) => r.approvalStatus === 'approved' || !r.approvalStatus),
     [manualRecords]
+  );
+  const rejectedSubmissions = useMemo(
+    () => manualRecords.filter((r) => r.approvalStatus === 'rejected'),
+    [manualRecords]
+  );
+  const totalLiveIdentifiersCount = useMemo(
+    () => records.length + approvedManualRecords.length,
+    [records.length, approvedManualRecords.length]
   );
 
   // Manual Records Filter & Pagination
@@ -453,12 +461,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           {/* ======================================================== */}
           {activeTab === 'overview' && (
             <div id="admin-tab-overview" className="space-y-6 animate-in fade-in duration-200">
-              {/* Summary Metric Cards Grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {/* Metric: User Submissions & Approvals (Priority Action Card) */}
+              {/* Core Workflow Metric Cards Grid (Requirements 15 & 16) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                {/* 1. Total LIVE Identifiers in Portal */}
+                <div className="bg-white p-5 rounded-2xl border border-indigo-100 shadow-xs space-y-1 relative overflow-hidden ring-1 ring-indigo-500/10">
+                  <div className="flex items-center justify-between text-slate-500">
+                    <span className="text-xs font-bold uppercase tracking-wider text-indigo-900">
+                      Total LIVE Identifiers
+                    </span>
+                    <div className="w-7 h-7 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                      <Database className="w-4 h-4" />
+                    </div>
+                  </div>
+                  <div className="text-2xl sm:text-3xl font-black text-slate-900">
+                    {totalLiveIdentifiersCount.toLocaleString()}
+                  </div>
+                  <div className="text-[11px] text-slate-500 flex items-center gap-1.5 pt-1">
+                    <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                    <span className="font-semibold text-emerald-700">Real-Time Cloud Firestore Sync</span>
+                  </div>
+                </div>
+
+                {/* 2. Pending Submissions */}
                 <div
                   id="admin-approvals-overview-card"
-                  className={`p-5 rounded-2xl border shadow-xs space-y-2 cursor-pointer transition-all ${
+                  className={`p-5 rounded-2xl border shadow-xs space-y-1 cursor-pointer transition-all ${
                     pendingSubmissions.length > 0
                       ? 'bg-gradient-to-br from-amber-500/10 via-amber-50 to-white border-amber-300 hover:border-amber-400 ring-1 ring-amber-200'
                       : 'bg-white border-slate-200/90 hover:border-indigo-200'
@@ -467,68 +494,122 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 >
                   <div className="flex items-center justify-between text-slate-500">
                     <span className="text-xs font-bold uppercase tracking-wider text-amber-900">
-                      User Submissions Queue
+                      Pending Submissions
                     </span>
                     <Clock className={`w-4 h-4 ${pendingSubmissions.length > 0 ? 'text-amber-600 animate-pulse' : 'text-slate-400'}`} />
                   </div>
-                  <div className="flex items-baseline gap-2">
-                    <div className="text-2xl sm:text-3xl font-black text-slate-900">
-                      {pendingSubmissions.length}
-                    </div>
-                    <span className="text-xs font-bold text-amber-700">
-                      Pending Approvals
-                    </span>
+                  <div className="text-2xl sm:text-3xl font-black text-slate-900">
+                    {pendingSubmissions.length}
                   </div>
                   <div className="text-[11px] text-slate-500 flex items-center justify-between pt-1 border-t border-slate-100">
-                    <span>{approvedManualRecords.length} Live Manual Records</span>
+                    <span>Awaiting Admin Review</span>
                     <span className="font-bold text-indigo-600 hover:text-indigo-800">
-                      Review Queue →
+                      Queue →
                     </span>
                   </div>
                 </div>
 
-                {/* Metric 1: Total Uploaded Records */}
+                {/* 3. Approved Submissions */}
                 <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-xs space-y-1">
                   <div className="flex items-center justify-between text-slate-500">
-                    <span className="text-xs font-bold uppercase tracking-wider">Total Active Records</span>
-                    <Database className="w-4 h-4 text-indigo-600" />
+                    <span className="text-xs font-bold uppercase tracking-wider text-emerald-900">
+                      Approved Submissions
+                    </span>
+                    <div className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                      <CheckCircle2 className="w-4 h-4" />
+                    </div>
                   </div>
                   <div className="text-2xl sm:text-3xl font-black text-slate-900">
-                    {records.length.toLocaleString()}
+                    {approvedManualRecords.length.toLocaleString()}
+                  </div>
+                  <div className="text-[11px] text-slate-500 flex items-center gap-1 pt-1">
+                    <span className="text-emerald-600 font-semibold">Active & Searchable Live</span>
+                  </div>
+                </div>
+
+                {/* 4. Rejected Submissions */}
+                <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-xs space-y-1">
+                  <div className="flex items-center justify-between text-slate-500">
+                    <span className="text-xs font-bold uppercase tracking-wider text-slate-600">
+                      Rejected Submissions
+                    </span>
+                    <div className="w-7 h-7 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center">
+                      <XCircle className="w-4 h-4" />
+                    </div>
+                  </div>
+                  <div className="text-2xl sm:text-3xl font-black text-slate-900">
+                    {rejectedSubmissions.length.toLocaleString()}
+                  </div>
+                  <div className="text-[11px] text-slate-500 flex items-center gap-1 pt-1">
+                    <span>Audit history preserved</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* One-Click CSV Export & Master DB Action Banner */}
+              <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-indigo-900 via-indigo-800 to-slate-900 text-white shadow-md flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-amber-300" />
+                    <h4 className="text-sm font-black uppercase tracking-wider">
+                      Master Cloud Firestore Database
+                    </h4>
+                  </div>
+                  <p className="text-xs text-indigo-100/90 max-w-xl">
+                    Export the complete current live identifier database directly with one click. Contains all approved identifiers, bank names, details, and approval timestamps.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={onExportDataset}
+                  className="shrink-0 px-4 py-2.5 rounded-xl bg-white hover:bg-indigo-50 text-indigo-900 text-xs font-black shadow-sm flex items-center gap-2 transition-all cursor-pointer"
+                >
+                  <Download className="w-4 h-4 text-indigo-700" />
+                  <span>Download Complete LIVE CSV</span>
+                </button>
+              </div>
+
+              {/* Secondary Dataset Summary Cards Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {/* Metric 1: Detected Banking Entities */}
+                <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-xs space-y-1">
+                  <div className="flex items-center justify-between text-slate-500">
+                    <span className="text-xs font-bold uppercase tracking-wider">Financial Institutions</span>
+                    <Building2 className="w-4 h-4 text-indigo-600" />
+                  </div>
+                  <div className="text-2xl sm:text-3xl font-black text-slate-900">
+                    {uniqueBanks.length}
                   </div>
                   <div className="text-[11px] text-slate-500 flex items-center gap-1">
-                    <span className={`font-semibold ${hasData ? 'text-emerald-600' : 'text-slate-400'}`}>
-                      {hasData ? '● Database Online' : '○ Database Empty'}
-                    </span>
-                    <span>• {uniqueBanks.length} Banks Detected</span>
+                    <span className="text-emerald-600 font-semibold">Banks & NBFCs Covered</span>
                   </div>
                 </div>
 
                 {/* Metric 2: Total CSV Files */}
                 <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-xs space-y-1">
                   <div className="flex items-center justify-between text-slate-500">
-                    <span className="text-xs font-bold uppercase tracking-wider">Total CSV Files</span>
+                    <span className="text-xs font-bold uppercase tracking-wider">Master Dataset Status</span>
                     <FileSpreadsheet className="w-4 h-4 text-blue-600" />
                   </div>
                   <div className="text-2xl sm:text-3xl font-black text-slate-900">
-                    {hasData ? '1 File' : '0 Files'}
+                    {hasData ? 'Active' : 'Synchronizing'}
                   </div>
                   <div className="text-[11px] text-slate-500 truncate" title={csvMetadata.fileName}>
-                    {hasData ? `${csvMetadata.fileName} (${csvMetadata.fileSize})` : 'No active file'}
+                    {hasData ? `${csvMetadata.fileName} (${csvMetadata.fileSize})` : 'Cloud Firestore Master'}
                   </div>
                 </div>
 
                 {/* Metric 3: Total Searches */}
                 <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-xs space-y-1">
                   <div className="flex items-center justify-between text-slate-500">
-                    <span className="text-xs font-bold uppercase tracking-wider">Total Searches</span>
+                    <span className="text-xs font-bold uppercase tracking-wider">Public Searches</span>
                     <Search className="w-4 h-4 text-amber-600" />
                   </div>
                   <div className="text-2xl sm:text-3xl font-black text-slate-900">
                     {searchHistory.length}
                   </div>
                   <div className="text-[11px] text-slate-500">
-                    Session search log count
+                    Total session verification logs
                   </div>
                 </div>
 

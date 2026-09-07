@@ -1,5 +1,41 @@
 {
   "entities": {
+    "live_identifiers": {
+      "description": "Master public searchable database of approved Hunter risk records",
+      "fields": {
+        "identifier": { "type": "string", "description": "Identifier (Hunter ID, PAN, Mobile, Account, Tax ID)" },
+        "normalizedIdentifier": { "type": "string", "description": "Standardized uppercase normalized identifier for exact index searching" },
+        "bankName": { "type": "string", "description": "Originating bank or financial institution" },
+        "details": { "type": "string", "description": "Entity name, match details, or risk notes" },
+        "source": { "type": "string", "description": "Data source, approval reference, or dataset origin" },
+        "status": { "type": "string", "description": "Lifecycle status: 'approved', 'live', or 'retired'" },
+        "createdBy": { "type": "string", "description": "Creator user/admin or 'Public Submission'" },
+        "createdAt": { "type": "string", "description": "Creation ISO timestamp" },
+        "updatedBy": { "type": "string", "description": "Admin email who updated the record" },
+        "updatedAt": { "type": "string", "description": "Last update ISO timestamp" },
+        "approvedBy": { "type": "string", "description": "Admin email who approved the record" },
+        "approvedAt": { "type": "string", "description": "Approval ISO timestamp" }
+      }
+    },
+    "submissions": {
+      "description": "Public user submissions and proposed changes awaiting Admin review",
+      "fields": {
+        "submissionId": { "type": "string", "description": "Unique submission reference identifier" },
+        "identifier": { "type": "string", "description": "Submitted identifier" },
+        "normalizedIdentifier": { "type": "string", "description": "Normalized uppercase identifier" },
+        "bankName": { "type": "string", "description": "Submitted bank or financial institution" },
+        "details": { "type": "string", "description": "Submitted details or notes" },
+        "source": { "type": "string", "description": "Source reference or explanation" },
+        "submissionType": { "type": "string", "description": "Type: 'new' or 'update'" },
+        "status": { "type": "string", "description": "Approval status: 'pending', 'approved', or 'rejected'" },
+        "submittedBy": { "type": "string", "description": "Contributor identifier or anonymous" },
+        "submittedAt": { "type": "string", "description": "Submission ISO timestamp" },
+        "reviewedBy": { "type": "string", "description": "Admin email who reviewed" },
+        "reviewedAt": { "type": "string", "description": "Review ISO timestamp" },
+        "rejectionReason": { "type": "string", "description": "Optional notes or rejection explanation" },
+        "approvedAt": { "type": "string", "description": "Approval ISO timestamp" }
+      }
+    },
     "users": {
       "description": "Authenticated user profiles with role-based access control",
       "fields": {

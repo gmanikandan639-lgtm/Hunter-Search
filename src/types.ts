@@ -253,3 +253,56 @@ export interface FirestoreCsvMetadata {
   status: string; // 'active', 'replaced', 'archived'
 }
 
+/**
+ * 9.A live_identifiers Collection
+ * Master public searchable database in Cloud Firestore
+ */
+export interface LiveIdentifierRecord {
+  id: string; // Firestore document ID
+  identifier: string;
+  normalizedIdentifier: string; // Uppercase, trimmed, sanitized key
+  bankName: string;
+  details: string;
+  source: string;
+  status: 'approved' | 'live' | 'rejected' | 'retired' | string;
+  createdBy?: string;
+  createdAt: string;
+  updatedBy?: string;
+  updatedAt?: string;
+  approvedBy?: string;
+  approvedAt?: string;
+  // Indexing & field extensions for Hunter Search
+  hunterId?: string;
+  name?: string;
+  accountNumber?: string;
+  mobile?: string;
+  pan?: string;
+  category?: string;
+  remarks?: string;
+  submissionId?: string;
+  rawColumns?: Record<string, string>;
+}
+
+/**
+ * 9.B submissions Collection
+ * Contains public user submissions and proposed changes awaiting Admin review
+ */
+export interface SubmissionRecord {
+  id: string; // Firestore doc ID
+  submissionId: string;
+  identifier: string;
+  normalizedIdentifier: string;
+  bankName: string;
+  details: string;
+  source: string;
+  submissionType: 'new' | 'update';
+  status: 'pending' | 'approved' | 'rejected';
+  submittedBy?: string;
+  submittedAt: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  rejectionReason?: string;
+  approvedAt?: string;
+  existingRecordId?: string; // If this is an update proposal
+}
+

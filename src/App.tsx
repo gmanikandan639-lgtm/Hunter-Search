@@ -57,6 +57,17 @@ import {
   syncUserProfileInFirestore,
   searchBothHunterCollections,
   seedDefaultHunterRecordsIfEmpty,
+  subscribeToLiveIdentifiers,
+  subscribeToSubmissions,
+  approveSubmissionInFirestore,
+  rejectSubmissionInFirestore,
+  adminDirectAddLiveIdentifier,
+  adminDirectUpdateLiveIdentifier,
+  adminDirectDeleteLiveIdentifier,
+  downloadLiveIdentifiersAsCSV,
+  seedLiveIdentifiersIfEmpty,
+  LiveIdentifierRecord,
+  SubmissionRecord,
 } from './lib/firebase';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 
@@ -116,57 +127,109 @@ export default function App() {
   const [manualRecords, setManualRecords] = useState<ManualHunterRecord[]>([]);
   const [isAddManualRecordModalOpen, setIsAddManualRecordModalOpen] = useState<boolean>(false);
 
+  // Master Database: Cloud Firestore live_identifiers and submissions
+  const [liveIdentifiers, setLiveIdentifiers] = useState<LiveIdentifierRecord[]>([]);
+  const [submissionsList, setSubmissionsList] = useState<SubmissionRecord[]>([]);
+
   // User Frontend Submission Modal State
   const [isUserSubmitModalOpen, setIsUserSubmitModalOpen] = useState<boolean>(false);
   const [userSubmitInitialRecord, setUserSubmitInitialRecord] = useState<RecordItem | null>(null);
   const [userSubmitMode, setUserSubmitMode] = useState<'new' | 'update'>('new');
 
   // Pending Approvals Count Memo
-  const pendingApprovalsCount = useMemo(
-    () => manualRecords.filter((r) => r.approvalStatus === 'pending').length,
-    [manualRecords]
-  );
+  const pendingApprovalsCount = useMemo(() => {
+    const manualPending = manualRecords.filter((r) => r.approvalStatus === 'pending').length;
+    const subPending = submissionsList.filter((s) => s.status === 'pending').length;
+    return Math.max(manualPending, subPending);
+  }, [manualRecords, submissionsList]);
 
   // Firebase Storage Upload States
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [isUploading, setIsUploading] = useState<boolean>(false);
 
-  // Combined Active Search Set: CSV Records + Shared Manual Records
-  // All manual records from manual_identifiers are shared Hunter data
+  // Combined Active Search Set: Cloud Firestore LIVE Identifiers + Manual Records + Dataset Records
   const combinedRecords = useMemo(() => {
-    const activeManual = manualRecords.filter(
-      (m) => m.approvalStatus !== 'rejected'
-    );
+    const seenIds = new Set<string>();
+    const result: RecordItem[] = [];
 
-    const manualRecordItems: RecordItem[] = activeManual.map((m) => {
-      const idVal = (m.hunterId || (m as any).identifier || m.id || '').toString().trim();
-      return {
-        id: m.id,
-        hunterId: idVal,
-        identifier: idVal,
-        name: m.name || m.details || idVal,
-        bankName: m.bankName || 'Unknown Financial Institution',
-        details: m.details || m.remarks || m.notes || 'Manual Identifier Record',
-        accountNumber: m.accountNumber || '',
-        mobile: m.mobile || '',
-        pan: m.pan || '',
-        status: m.status || 'Active Reference',
-        notes: m.remarks || m.notes || m.details || 'Registered Hunter Record',
-        uploadedBy: m.submittedBy?.name || m.createdBy || 'Administrator',
-        uploadDate: m.submittedAt || m.createdAt || '',
-        lastUpdated: m.updatedAt || m.createdAt || '',
-        rawColumns: {
-          'Hunter Identification Number': idVal,
-          'Bank/NBFC Name': m.bankName,
-          'Status': m.status || '',
-          'Remarks': m.remarks || m.notes || m.details || '',
-          ...(m.rawColumns || {}),
-        },
-      };
+    // 1. Primary Master: Cloud Firestore Live Identifiers
+    liveIdentifiers.forEach((l) => {
+      const idVal = (l.identifier || l.hunterId || l.id || '').toString().trim();
+      const key = idVal.toUpperCase();
+      if (!seenIds.has(key)) {
+        seenIds.add(key);
+        result.push({
+          id: l.id,
+          hunterId: idVal,
+          identifier: idVal,
+          name: l.details || l.name || idVal,
+          bankName: l.bankName || 'Financial Institution',
+          details: l.details || 'Approved Master Live Identifier',
+          accountNumber: '',
+          mobile: '',
+          pan: '',
+          status: l.status || 'Active Reference',
+          notes: l.source ? `Source: ${l.source}` : 'Cloud Firestore Live Master',
+          uploadedBy: l.approvedBy || l.createdBy || 'Administrator',
+          uploadDate: l.approvedAt || l.createdAt || '',
+          lastUpdated: l.updatedAt || l.approvedAt || l.createdAt || '',
+          rawColumns: {
+            'Hunter Identification Number': idVal,
+            'Bank/NBFC Name': l.bankName,
+            'Status': l.status || 'Approved',
+            'Details': l.details || '',
+            'Source': l.source || 'Cloud Firestore',
+            ...(l.rawColumns || {}),
+          },
+        });
+      }
     });
 
-    return [...manualRecordItems, ...records];
-  }, [records, manualRecords]);
+    // 2. Secondary: Active Manual Records
+    const activeManual = manualRecords.filter((m) => m.approvalStatus !== 'rejected');
+    activeManual.forEach((m) => {
+      const idVal = (m.hunterId || (m as any).identifier || m.id || '').toString().trim();
+      const key = idVal.toUpperCase();
+      if (!seenIds.has(key)) {
+        seenIds.add(key);
+        result.push({
+          id: m.id,
+          hunterId: idVal,
+          identifier: idVal,
+          name: m.name || m.details || idVal,
+          bankName: m.bankName || 'Unknown Financial Institution',
+          details: m.details || m.remarks || m.notes || 'Manual Identifier Record',
+          accountNumber: m.accountNumber || '',
+          mobile: m.mobile || '',
+          pan: m.pan || '',
+          status: m.status || 'Active Reference',
+          notes: m.remarks || m.notes || m.details || 'Registered Hunter Record',
+          uploadedBy: m.submittedBy?.name || m.createdBy || 'Administrator',
+          uploadDate: m.submittedAt || m.createdAt || '',
+          lastUpdated: m.updatedAt || m.createdAt || '',
+          rawColumns: {
+            'Hunter Identification Number': idVal,
+            'Bank/NBFC Name': m.bankName,
+            'Status': m.status || '',
+            'Remarks': m.remarks || m.notes || m.details || '',
+            ...(m.rawColumns || {}),
+          },
+        });
+      }
+    });
+
+    // 3. Fallback: CSV Dataset Records
+    records.forEach((r) => {
+      const idVal = (r.hunterId || r.id || '').toString().trim();
+      const key = idVal.toUpperCase();
+      if (!seenIds.has(key)) {
+        seenIds.add(key);
+        result.push(r);
+      }
+    });
+
+    return result;
+  }, [liveIdentifiers, manualRecords, records]);
 
   // Combined Unique Banks
   const combinedUniqueBanks = useMemo(() => {
@@ -208,7 +271,7 @@ export default function App() {
     };
   }, [csvMetadata, combinedRecords.length, combinedUniqueBanks.length]);
 
-  // Real-Time Firebase Firestore Synchronization (Manual Records, Active Dataset, Search History, Visitor Stats)
+  // Real-Time Firebase Firestore Synchronization (Live Master Identifiers, Submissions, Manual Records, Dataset, Visitor Stats)
   useEffect(() => {
     // 1. Ensure Firebase Auth initialization
     initAuth().catch((err) => console.warn('Firebase auth initialization note:', err));
@@ -218,8 +281,23 @@ export default function App() {
       setLiveSyncStatus(status);
     });
 
-    // 3. Real-Time Listener: Manual Hunter Identifiers (Admin added/edited/deleted)
-    // Instantly fires on all connected devices when Firestore records change
+    // 3. Real-Time Master Listener: Cloud Firestore live_identifiers
+    // Fires instantly for both unauthenticated search users and authenticated admins
+    const unsubscribeLive = subscribeToLiveIdentifiers(
+      (liveDocs) => {
+        setLiveIdentifiers(liveDocs);
+      },
+      (status) => {
+        setLiveSyncStatus(status);
+      }
+    );
+
+    // 4. Real-Time Submissions Listener: Public contributions queue for Admin approval
+    const unsubscribeSubmissions = subscribeToSubmissions((subs) => {
+      setSubmissionsList(subs);
+    });
+
+    // 5. Real-Time Listener: Manual Hunter Identifiers (Sync & Fallback)
     const unsubscribeManual = subscribeToManualHunterRecords(
       (remoteRecords) => {
         setManualRecords(remoteRecords);
@@ -229,7 +307,7 @@ export default function App() {
       }
     );
 
-    // 4. Real-Time Listener: Central Active Reference Dataset
+    // 6. Real-Time Listener: Central Active Reference Dataset
     const unsubscribeDataset = subscribeToActiveDataset((data) => {
       if (data && Array.isArray(data.records) && data.metadata) {
         setRecords(data.records);
@@ -241,14 +319,14 @@ export default function App() {
       }
     });
 
-    // 5. Real-Time Listener: Search History Audit Logs
+    // 7. Real-Time Listener: Search History Audit Logs
     const unsubscribeHistory = subscribeToSearchHistory((remoteHistory) => {
       if (remoteHistory && remoteHistory.length > 0) {
         setSearchHistory(remoteHistory);
       }
     });
 
-    // 6. Real-Time Listener: Visitor Metrics
+    // 8. Real-Time Listener: Visitor Metrics
     const unsubscribeStats = subscribeToVisitorStats((remoteStats) => {
       if (remoteStats) {
         setVisitorStats(remoteStats);
@@ -259,11 +337,14 @@ export default function App() {
     const { isNew } = getOrCreateVisitorId();
     incrementVisitorStatsInFirestore(isNew).catch(() => {});
 
-    // Seed default demo hunter records if Firestore collection is brand new/empty
+    // Seed master live identifiers if database is newly initialized
+    seedLiveIdentifiersIfEmpty().catch(() => {});
     seedDefaultHunterRecordsIfEmpty().catch(() => {});
 
     return () => {
       unsubscribeSync();
+      unsubscribeLive();
+      unsubscribeSubmissions();
       unsubscribeManual();
       unsubscribeDataset();
       unsubscribeHistory();
@@ -870,10 +951,23 @@ export default function App() {
     setManualRecords((prev) => [newRecord, ...prev]);
 
     try {
-      // 1. Direct write to Cloud Firestore
+      // 1. Write to master live_identifiers collection
+      await adminDirectAddLiveIdentifier(
+        {
+          identifier: input.hunterId,
+          bankName: input.bankName,
+          details: input.remarks || input.notes || input.name || '',
+          source: 'admin_direct',
+          status: input.status || 'Active Reference',
+          rawColumns: input.rawColumns,
+        },
+        adminSession?.name || 'Administrator Manikandan'
+      );
+
+      // 2. Direct write to Cloud Firestore manual_identifiers
       await addManualHunterRecordToFirestore(newRecord);
 
-      // 2. Also notify backend API proxy
+      // 3. Also notify backend API proxy
       fetch('/api/manual-records', {
         method: 'POST',
         headers: {
@@ -888,9 +982,9 @@ export default function App() {
 
     triggerToast({
       type: 'success',
-      title: '✓ Hunter Identifier Added',
-      message: `Record "${input.hunterId}" (${input.bankName}) saved to Cloud Firestore.`,
-      subtext: 'Instantly synced across all connected devices and users',
+      title: '✓ Hunter Identifier Added & Live',
+      message: `Record "${input.hunterId}" (${input.bankName}) saved directly to Cloud Firestore LIVE database.`,
+      subtext: 'Instantly synced across all connected public search devices',
     });
   };
 
@@ -921,10 +1015,22 @@ export default function App() {
     );
 
     try {
-      // 1. Direct write to Cloud Firestore
+      // 1. Direct write to master live_identifiers
+      await adminDirectUpdateLiveIdentifier(
+        recordId,
+        {
+          identifier: input.hunterId,
+          bankName: input.bankName,
+          details: input.remarks || input.notes || input.name || '',
+          status: input.status || undefined,
+        },
+        adminSession?.name || 'Administrator Manikandan'
+      );
+
+      // 2. Write to Cloud Firestore manual_identifiers
       await updateManualHunterRecordInFirestore(recordId, input);
 
-      // 2. Also notify backend API proxy
+      // 3. Also notify backend API proxy
       fetch(`/api/manual-records/${recordId}`, {
         method: 'PUT',
         headers: {
@@ -949,12 +1055,16 @@ export default function App() {
     const target = manualRecords.find((r) => r.id === recordId);
     // Optimistic UI update
     setManualRecords((prev) => prev.filter((r) => r.id !== recordId));
+    setLiveIdentifiers((prev) => prev.filter((r) => r.id !== recordId));
 
     try {
-      // 1. Direct delete from Cloud Firestore
+      // 1. Direct delete from master live_identifiers
+      await adminDirectDeleteLiveIdentifier(recordId, adminSession?.name || 'Administrator Manikandan');
+
+      // 2. Delete from Cloud Firestore manual_identifiers
       await deleteManualHunterRecordFromFirestore(recordId);
 
-      // 2. Also notify backend API proxy
+      // 3. Also notify backend API proxy
       fetch(`/api/manual-records/${recordId}`, {
         method: 'DELETE',
         headers: {
@@ -1021,8 +1131,19 @@ export default function App() {
           : r
       )
     );
+    setSubmissionsList((prev) =>
+      prev.map((s) => (s.id === submissionId ? { ...s, status: 'approved' } : s))
+    );
 
     try {
+      // 1. Promote to master live_identifiers in Cloud Firestore
+      await approveSubmissionInFirestore(submissionId, adminName, {
+        identifier: adjustedData?.hunterId,
+        bankName: adjustedData?.bankName,
+        details: adjustedData?.remarks || adjustedData?.notes || adjustedData?.name,
+      });
+
+      // 2. Legacy collection sync
       await approveUserHunterSubmissionInFirestore(submissionId, adminName, adjustedData);
     } catch (err) {
       console.warn('Firestore approval sync note:', err);
@@ -1057,8 +1178,17 @@ export default function App() {
           : r
       )
     );
+    setSubmissionsList((prev) =>
+      prev.map((s) =>
+        s.id === submissionId ? { ...s, status: 'rejected', rejectionReason: reason } : s
+      )
+    );
 
     try {
+      // 1. Master submissions collection rejection in Cloud Firestore
+      await rejectSubmissionInFirestore(submissionId, adminName, reason);
+
+      // 2. Legacy collection sync
       await rejectUserHunterSubmissionInFirestore(submissionId, adminName, reason);
     } catch (err) {
       console.warn('Firestore rejection sync note:', err);
@@ -1068,7 +1198,7 @@ export default function App() {
     triggerToast({
       type: 'info',
       title: 'Submission Rejected',
-      message: `Record "${target?.hunterId || submissionId}" was marked as rejected.`,
+      message: `Record "${target?.hunterId || submissionId}" was marked as rejected with reason recorded.`,
     });
   };
 
@@ -1105,27 +1235,69 @@ export default function App() {
     performSearch(searchQuery, filters, combinedRecords);
   };
 
-  // Export entire dataset to CSV (Admin Portal only)
+  // Unified submissions and manual records for Admin dashboard and approvals queue
+  const combinedManualAndSubmissions = useMemo<ManualHunterRecord[]>(() => {
+    const list = [...manualRecords];
+    const existingIds = new Set(list.map((r) => r.id));
+
+    submissionsList.forEach((s) => {
+      const id = s.id || s.submissionId;
+      if (!existingIds.has(id)) {
+        existingIds.add(id);
+        list.push({
+          id,
+          hunterId: s.identifier,
+          bankName: s.bankName,
+          orgType: 'Bank',
+          name: s.identifier,
+          status: 'Pending Verification',
+          remarks: s.details,
+          createdBy: s.submittedBy || 'Public User',
+          createdAt: s.submittedAt,
+          updatedAt: s.submittedAt,
+          approvalStatus: s.status,
+          submittedBy: { name: s.submittedBy || 'Public User' },
+          submittedAt: s.submittedAt,
+          reviewedBy: s.reviewedBy,
+          reviewedAt: s.reviewedAt,
+          rejectionReason: s.rejectionReason,
+          isUpdateRequest: s.submissionType === 'update' || (s as any).type === 'update',
+          targetRecordId: s.existingRecordId || (s as any).targetRecordId,
+          rawColumns: (s as any).rawColumns || {},
+        });
+      }
+    });
+
+    return list;
+  }, [manualRecords, submissionsList]);
+
+  // Export entire dataset to CSV (Admin Portal only - Requirement 13 & 14)
   const handleExportDataset = () => {
     if (combinedRecords.length === 0) return;
-    const headers =
-      csvMetadata.headers.length > 0
-        ? csvMetadata.headers
-        : ['Hunter Identification Number', 'Bank/NBFC Name', 'Status', 'Remarks'];
 
-    const csvContent = exportToCSV(combinedRecords, headers);
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute(
-      'download',
-      `hunter_database_backup_${new Date().toISOString().slice(0, 10)}.csv`
-    );
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    // Convert all active combined live records to live identifiers format for complete export
+    const exportItems: LiveIdentifierRecord[] = combinedRecords.map((r) => {
+      const matchingLive = liveIdentifiers.find((l) => l.id === r.id || l.identifier === r.hunterId);
+      return {
+        id: r.id,
+        identifier: r.hunterId || r.id,
+        bankName: r.bankName,
+        details: r.details || r.name || 'Hunter Identifier Reference',
+        source: matchingLive?.source || r.notes || 'Master Live Database',
+        status: matchingLive?.status || r.status || 'Active Reference',
+        createdAt: matchingLive?.createdAt || r.uploadDate || '',
+        updatedAt: matchingLive?.updatedAt || r.lastUpdated || '',
+        approvedAt: matchingLive?.approvedAt || r.uploadDate || '',
+        approvedBy: matchingLive?.approvedBy || r.uploadedBy || 'Administrator',
+      };
+    });
+
+    downloadLiveIdentifiersAsCSV(exportItems);
+    triggerToast({
+      type: 'success',
+      title: '✓ Live CSV Export Complete',
+      message: `Downloaded ${exportItems.length.toLocaleString()} LIVE identifiers from active master database with one click.`,
+    });
   };
 
   const handleClearHistory = () => {
@@ -1263,7 +1435,7 @@ export default function App() {
               adminSession={adminSession}
               csvMetadata={csvMetadata}
               records={records}
-              manualRecords={manualRecords}
+              manualRecords={combinedManualAndSubmissions}
               uniqueBanks={combinedUniqueBanks}
               searchHistory={searchHistory}
               onLogout={handleLogout}

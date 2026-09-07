@@ -15,6 +15,7 @@ import {
   doc,
   onSnapshot,
   setDoc,
+  updateDoc,
   deleteDoc,
   getDoc,
   getDocs,
@@ -38,7 +39,11 @@ import {
   FirestoreManualIdentifier,
   FirestoreCsvMetadata,
   FirestoreUserProfile,
+  LiveIdentifierRecord,
+  SubmissionRecord,
 } from '../types';
+
+export type { LiveIdentifierRecord, SubmissionRecord };
 import { getInitialDemoData } from '../data/sampleDatabase';
 
 // Centralized Firebase configuration for project: fraudriskhub-44639
@@ -572,14 +577,12 @@ export const subscribeToManualHunterRecords = (
     }
   };
 
-  // Attach immediately if user is already authenticated
-  if (auth.currentUser) {
-    attachFirestoreListener();
-  }
+  // Attach immediately for public search users (no authentication required)
+  attachFirestoreListener();
 
-  // Also listen to auth changes: when a user logs in, immediately attach listener
+  // Also re-check on auth changes: when an admin logs in
   const unsubAuth = onAuthStateChanged(auth, (user) => {
-    if (user && !isCancelled) {
+    if (!isCancelled) {
       attachFirestoreListener();
     }
   });
@@ -893,13 +896,45 @@ export const submitUserHunterRecordToFirestore = async (
     }).catch(() => {});
   } catch (e) {}
 
-  // Cloud Firestore Persistence
+  // Cloud Firestore Persistence (master submissions collection and optional admin cache)
   try {
-    const cleanData = cleanForFirestore({ ...payload, serverTime: serverTimestamp() });
-    await Promise.all([
-      setDoc(recordDoc, cleanData, { merge: true }),
-      setDoc(fallbackRecordDoc, cleanData, { merge: true }),
-    ]);
+    const normId = getNormalizedIdentifier(submission.hunterId.trim());
+    const subDoc = doc(db, SUBMISSIONS_COLLECTION, docId);
+    
+    // Write public submission with required fields for Firestore security rules
+    await setDoc(
+      subDoc,
+      cleanForFirestore({
+        id: docId,
+        submissionId: docId,
+        identifier: submission.hunterId.trim(),
+        normalizedIdentifier: normId,
+        bankName: submission.bankName.trim(),
+        details: submission.remarks?.trim() || submission.name || 'User submitted identifier',
+        source: 'public_contribution',
+        type: submission.isUpdateRequest ? 'update' : 'new',
+        submissionType: submission.isUpdateRequest ? 'update' : 'new',
+        targetRecordId: submission.targetRecordId || '',
+        existingRecordId: submission.targetRecordId || '',
+        status: 'pending',
+        submittedAt: now,
+        submittedBy: submitterInfo.name || 'Portal User',
+        rawColumns: payload.rawColumns || {},
+      })
+    );
+
+    // If an Admin is authenticated, also sync to manual_identifiers
+    if (auth.currentUser) {
+      try {
+        const cleanData = cleanForFirestore({ ...payload, serverTime: serverTimestamp() });
+        await Promise.all([
+          setDoc(recordDoc, cleanData, { merge: true }),
+          setDoc(fallbackRecordDoc, cleanData, { merge: true }),
+        ]);
+      } catch (adminWriteErr) {
+        // Admin write optional note
+      }
+    }
   } catch (err) {
     console.warn('Firestore write warning:', err);
   }
@@ -1937,6 +1972,518 @@ export const incrementVisitorStatsInFirestore = async (
     }
   } catch (err) {
     console.warn('Failed to update stats in Firestore:', err);
+  }
+};
+
+/* ========================================================================= */
+/* 9. LIVE IDENTIFIERS & PUBLIC SUBMISSIONS WORKFLOW (Cloud Firestore Master)*/
+/* ========================================================================= */
+
+export const LIVE_IDENTIFIERS_COLLECTION = 'live_identifiers';
+export const SUBMISSIONS_COLLECTION = 'submissions';
+
+/**
+ * Standardize identifier string: uppercase, trimmed for strict indexing & exact match
+ */
+export const getNormalizedIdentifier = (raw: string): string => {
+  return (raw || '').trim().toUpperCase();
+};
+
+/**
+ * Real-time listener for LIVE approved identifiers (Public and Admin access)
+ * No login required - reads directly from Cloud Firestore live_identifiers
+ */
+export const subscribeToLiveIdentifiers = (
+  callback: (records: LiveIdentifierRecord[]) => void,
+  onStatusChange?: (status: LiveSyncStatus) => void
+) => {
+  let unsubscribeSnapshot: (() => void) | null = null;
+  let isCancelled = false;
+
+  // Immediate local cache retrieval for instantaneous render
+  try {
+    const cached = localStorage.getItem('fraud_risk_hub_live_identifiers_cache');
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        callback(parsed);
+      }
+    }
+  } catch (e) {}
+
+  if (!isFirebaseConfigured) {
+    if (onStatusChange) onStatusChange('connected');
+    return () => {};
+  }
+
+  try {
+    const colRef = collection(db, LIVE_IDENTIFIERS_COLLECTION);
+    unsubscribeSnapshot = onSnapshot(
+      colRef,
+      { includeMetadataChanges: true },
+      (snapshot) => {
+        if (isCancelled) return;
+        const liveList: LiveIdentifierRecord[] = [];
+        snapshot.forEach((docSnap) => {
+          const d = docSnap.data();
+          // Public users only see approved/live records
+          if (d.status === 'approved' || d.status === 'live' || !d.status) {
+            liveList.push({
+              id: docSnap.id,
+              identifier: d.identifier || docSnap.id,
+              normalizedIdentifier: d.normalizedIdentifier || getNormalizedIdentifier(d.identifier || docSnap.id),
+              bankName: d.bankName || 'Financial Institution',
+              details: d.details || d.name || d.remarks || 'Approved Hunter Identifier',
+              source: d.source || 'Cloud Firestore',
+              status: (d.status as any) || 'approved',
+              createdBy: d.createdBy || 'Administrator',
+              createdAt: d.createdAt || new Date().toISOString(),
+              updatedBy: d.updatedBy,
+              updatedAt: d.updatedAt,
+              approvedBy: d.approvedBy,
+              approvedAt: d.approvedAt,
+              hunterId: d.identifier || docSnap.id,
+              name: d.name || d.identifier || docSnap.id,
+              rawColumns: d.rawColumns || {},
+            });
+          }
+        });
+
+        // Sort descending by approval / update timestamp
+        liveList.sort((a, b) => {
+          const tA = new Date(a.updatedAt || a.approvedAt || a.createdAt).getTime();
+          const tB = new Date(b.updatedAt || b.approvedAt || b.createdAt).getTime();
+          return tB - tA;
+        });
+
+        try {
+          localStorage.setItem('fraud_risk_hub_live_identifiers_cache', JSON.stringify(liveList));
+        } catch (e) {}
+
+        if (onStatusChange) onStatusChange('connected');
+        callback(liveList);
+      },
+      (err) => {
+        console.warn('Firestore live_identifiers onSnapshot note:', err.message);
+        if (onStatusChange) onStatusChange('reconnecting');
+      }
+    );
+  } catch (e) {
+    console.warn('Failed to subscribe to live_identifiers:', e);
+  }
+
+  return () => {
+    isCancelled = true;
+    if (unsubscribeSnapshot) {
+      unsubscribeSnapshot();
+    }
+  };
+};
+
+/**
+ * Real-time listener for Submissions Approval Queue (Admin only)
+ */
+export const subscribeToSubmissions = (
+  callback: (submissions: SubmissionRecord[]) => void
+) => {
+  let unsubscribe: (() => void) | null = null;
+  let isCancelled = false;
+
+  const attachListener = () => {
+    if (isCancelled || !isFirebaseConfigured || !auth.currentUser) return;
+    try {
+      if (unsubscribe) unsubscribe();
+      const colRef = collection(db, SUBMISSIONS_COLLECTION);
+      unsubscribe = onSnapshot(
+        colRef,
+        (snapshot) => {
+          if (isCancelled) return;
+          const list: SubmissionRecord[] = [];
+          snapshot.forEach((docSnap) => {
+            const d = docSnap.data();
+            list.push({
+              id: docSnap.id,
+              submissionId: d.submissionId || docSnap.id,
+              identifier: d.identifier || '',
+              normalizedIdentifier: d.normalizedIdentifier || getNormalizedIdentifier(d.identifier || ''),
+              bankName: d.bankName || '',
+              details: d.details || '',
+              source: d.source || 'Public Contribution',
+              submissionType: (d.submissionType as any) || 'new',
+              status: (d.status as any) || 'pending',
+              submittedBy: d.submittedBy || 'Public User',
+              submittedAt: d.submittedAt || new Date().toISOString(),
+              reviewedBy: d.reviewedBy,
+              reviewedAt: d.reviewedAt,
+              rejectionReason: d.rejectionReason,
+              approvedAt: d.approvedAt,
+              existingRecordId: d.existingRecordId,
+            });
+          });
+
+          // Sort pending first, then by submittedAt descending
+          list.sort((a, b) => {
+            if (a.status === 'pending' && b.status !== 'pending') return -1;
+            if (b.status === 'pending' && a.status !== 'pending') return 1;
+            return new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime();
+          });
+
+          callback(list);
+        },
+        (err) => {
+          if (err.code !== 'permission-denied') {
+            console.warn('Submissions onSnapshot error:', err);
+          }
+        }
+      );
+    } catch (e) {
+      console.warn('Failed to listen to submissions:', e);
+    }
+  };
+
+  if (auth.currentUser) {
+    attachListener();
+  }
+
+  const unsubAuth = onAuthStateChanged(auth, (user) => {
+    if (user && !isCancelled) {
+      attachListener();
+    }
+  });
+
+  return () => {
+    isCancelled = true;
+    if (unsubAuth) unsubAuth();
+    if (unsubscribe) unsubscribe();
+  };
+};
+
+/**
+ * Public User Contribution (No login required)
+ * Submits a new or updated identifier to the 'submissions' collection
+ * Strictly sets status: 'pending' without admin fields.
+ */
+export const submitPublicContribution = async (submission: {
+  identifier: string;
+  bankName: string;
+  details?: string;
+  source?: string;
+  submissionType?: 'new' | 'update';
+  submittedBy?: string;
+  existingRecordId?: string;
+}): Promise<string> => {
+  const cleanId = submission.identifier.trim();
+  const normId = getNormalizedIdentifier(cleanId);
+  const now = new Date().toISOString();
+  const docId = `sub-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+
+  const docRef = doc(db, SUBMISSIONS_COLLECTION, docId);
+
+  // Strictly conform to Firestore rules: status must be 'pending', identifier non-empty,
+  // normalizedIdentifier non-empty, and NO admin approval fields set.
+  const payload: any = {
+    id: docId,
+    submissionId: docId,
+    identifier: cleanId,
+    normalizedIdentifier: normId,
+    bankName: submission.bankName.trim(),
+    details: (submission.details || 'Contributed Hunter identifier for verification.').trim(),
+    source: (submission.source || 'Public Contribution').trim(),
+    submissionType: submission.submissionType || 'new',
+    status: 'pending',
+    submittedBy: (submission.submittedBy || 'Public User').trim(),
+    submittedAt: now,
+  };
+
+  if (submission.existingRecordId) {
+    payload.existingRecordId = submission.existingRecordId;
+  }
+
+  await setDoc(docRef, cleanForFirestore(payload));
+
+  return docId;
+};
+
+/**
+ * Admin Action: Approve Submission
+ * 1. Sets submission status to 'approved'
+ * 2. Adds/updates the record in live_identifiers
+ * 3. Immediately searchable and visible in real-time across all public clients
+ */
+export const approveSubmissionInFirestore = async (
+  submissionOrId: SubmissionRecord | string,
+  adminName: string,
+  adjustedData?: {
+    identifier?: string;
+    bankName?: string;
+    details?: string;
+    source?: string;
+  }
+): Promise<void> => {
+  const now = new Date().toISOString();
+  const subId = typeof submissionOrId === 'string' ? submissionOrId : submissionOrId.id;
+  const subDocRef = doc(db, SUBMISSIONS_COLLECTION, subId);
+
+  // 1. Update submission status in 'submissions'
+  try {
+    await updateDoc(subDocRef, {
+      status: 'approved',
+      reviewedBy: adminName || 'Administrator',
+      reviewedAt: now,
+      approvedBy: adminName || 'Administrator',
+      approvedAt: now,
+    });
+  } catch (e) {
+    console.warn('Submission update notice:', e);
+  }
+
+  // 2. Fetch existing submission info if an ID string was provided
+  let existingSub: Partial<SubmissionRecord> | null =
+    typeof submissionOrId === 'object' ? submissionOrId : null;
+  if (!existingSub) {
+    try {
+      const snap = await getDoc(subDocRef);
+      if (snap.exists()) {
+        existingSub = snap.data() as Partial<SubmissionRecord>;
+      }
+    } catch (e) {}
+  }
+
+  // 3. Add / Update document in 'live_identifiers'
+  const finalIdentifier =
+    adjustedData?.identifier ||
+    existingSub?.identifier ||
+    (typeof submissionOrId === 'string' ? submissionOrId : '');
+  const normId = getNormalizedIdentifier(finalIdentifier);
+  const liveDocId =
+    existingSub?.existingRecordId || `live-${normId.replace(/[^A-Z0-9]/g, '_') || Date.now()}`;
+  const liveDocRef = doc(db, LIVE_IDENTIFIERS_COLLECTION, liveDocId);
+
+  const livePayload: LiveIdentifierRecord = {
+    id: liveDocId,
+    identifier: finalIdentifier,
+    normalizedIdentifier: normId,
+    bankName: adjustedData?.bankName || existingSub?.bankName || 'Financial Institution',
+    details: adjustedData?.details || existingSub?.details || 'Approved Hunter Identifier',
+    source: adjustedData?.source || existingSub?.source || 'Public Contribution (Approved)',
+    status: 'approved',
+    createdBy: existingSub?.submittedBy || 'Public User',
+    createdAt: existingSub?.submittedAt || now,
+    updatedBy: adminName || 'Administrator',
+    updatedAt: now,
+    approvedBy: adminName || 'Administrator',
+    approvedAt: now,
+    hunterId: finalIdentifier,
+    submissionId: existingSub?.submissionId || subId,
+  };
+
+  await setDoc(liveDocRef, cleanForFirestore(livePayload), { merge: true });
+};
+
+/**
+ * Admin Action: Reject Submission
+ * Sets status: 'rejected' in submissions collection.
+ * Record remains for audit trail, and does NOT appear in public live_identifiers.
+ */
+export const rejectSubmissionInFirestore = async (
+  submissionId: string,
+  adminName: string,
+  reason: string
+): Promise<void> => {
+  const now = new Date().toISOString();
+  const subDocRef = doc(db, SUBMISSIONS_COLLECTION, submissionId);
+
+  try {
+    await updateDoc(subDocRef, {
+      status: 'rejected',
+      rejectionReason: reason || 'Information could not be verified.',
+      reviewedBy: adminName || 'Administrator',
+      reviewedAt: now,
+    });
+  } catch (e) {
+    console.warn('Submission reject notice:', e);
+  }
+};
+
+/**
+ * Admin Direct Add: Add a completely new live identifier directly to Cloud Firestore
+ * Immediately goes live and searchable across all public searches.
+ */
+export const adminDirectAddLiveIdentifier = async (
+  record: {
+    identifier: string;
+    bankName: string;
+    details?: string;
+    source?: string;
+    status?: string;
+    rawColumns?: Record<string, any>;
+  },
+  adminName: string
+): Promise<string> => {
+  const cleanId = record.identifier.trim();
+  const normId = getNormalizedIdentifier(cleanId);
+  const now = new Date().toISOString();
+  const docId = `live-${normId.replace(/[^A-Z0-9]/g, '_') || Date.now()}`;
+  const liveDocRef = doc(db, LIVE_IDENTIFIERS_COLLECTION, docId);
+
+  const livePayload: LiveIdentifierRecord = {
+    id: docId,
+    identifier: cleanId,
+    normalizedIdentifier: normId,
+    bankName: record.bankName.trim(),
+    details: (record.details || 'Admin Registered Identifier').trim(),
+    source: (record.source || 'Admin Direct Registration').trim(),
+    status: record.status || 'approved',
+    createdBy: adminName || 'Administrator',
+    createdAt: now,
+    updatedBy: adminName || 'Administrator',
+    updatedAt: now,
+    approvedBy: adminName || 'Administrator',
+    approvedAt: now,
+    hunterId: cleanId,
+    rawColumns: record.rawColumns || {},
+  };
+
+  await setDoc(liveDocRef, cleanForFirestore(livePayload), { merge: true });
+  return docId;
+};
+
+/**
+ * Admin Direct Update: Edit bank name, details, source of an existing live identifier
+ */
+export const adminDirectUpdateLiveIdentifier = async (
+  recordId: string,
+  updates: Partial<LiveIdentifierRecord>,
+  adminName: string
+): Promise<void> => {
+  const now = new Date().toISOString();
+  const liveDocRef = doc(db, LIVE_IDENTIFIERS_COLLECTION, recordId);
+
+  const cleanUpdates: any = {
+    ...updates,
+    updatedBy: adminName || 'Administrator',
+    updatedAt: now,
+  };
+
+  if (updates.identifier) {
+    cleanUpdates.identifier = updates.identifier.trim();
+    cleanUpdates.normalizedIdentifier = getNormalizedIdentifier(updates.identifier);
+    cleanUpdates.hunterId = cleanUpdates.identifier;
+  }
+
+  await updateDoc(liveDocRef, cleanForFirestore(cleanUpdates));
+};
+
+/**
+ * Admin Direct Delete/Retire: Remove or retire a live identifier
+ */
+export const adminDirectDeleteLiveIdentifier = async (
+  recordId: string,
+  _adminName?: string
+): Promise<void> => {
+  const liveDocRef = doc(db, LIVE_IDENTIFIERS_COLLECTION, recordId);
+  await deleteDoc(liveDocRef);
+};
+
+/**
+ * One-Click CSV Export for Admin
+ * Formats all LIVE identifiers directly from Cloud Firestore into the specified format:
+ * Identifier, Bank Name, Details, Source, Status, Created Date, Updated Date, Approved Date
+ */
+export const downloadLiveIdentifiersAsCSV = (records: LiveIdentifierRecord[]): void => {
+  const headers = [
+    'Identifier',
+    'Bank Name',
+    'Details',
+    'Source',
+    'Status',
+    'Created Date',
+    'Updated Date',
+    'Approved Date',
+  ];
+
+  const escapeCSV = (val: any) => {
+    const s = String(val ?? '').replace(/"/g, '""');
+    return `"${s}"`;
+  };
+
+  const rows = records.map((r) => [
+    escapeCSV(r.identifier),
+    escapeCSV(r.bankName),
+    escapeCSV(r.details),
+    escapeCSV(r.source),
+    escapeCSV(r.status),
+    escapeCSV(r.createdAt ? new Date(r.createdAt).toLocaleString() : ''),
+    escapeCSV(r.updatedAt ? new Date(r.updatedAt).toLocaleString() : ''),
+    escapeCSV(r.approvedAt ? new Date(r.approvedAt).toLocaleString() : ''),
+  ]);
+
+  const csvContent = [headers.map(escapeCSV).join(','), ...rows.map((row) => row.join(','))].join('\r\n');
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.setAttribute('href', url);
+  link.setAttribute('download', `Hunter_Live_Identifiers_${new Date().toISOString().slice(0, 10)}.csv`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+};
+
+/**
+ * Migration & Preservation of Existing Data:
+ * Migrates sample reference database and any existing records into live_identifiers
+ * if the live_identifiers collection has fewer than 5 documents.
+ */
+export const seedLiveIdentifiersIfEmpty = async (): Promise<number> => {
+  if (!isFirebaseConfigured) return 0;
+  try {
+    const colRef = collection(db, LIVE_IDENTIFIERS_COLLECTION);
+    const snap = await getDocs(query(colRef, limit(5)));
+    if (snap.size >= 5) {
+      return snap.size;
+    }
+
+    // Seed from sample demo CSV and existing records
+    const initial = getInitialDemoData();
+    const batch = writeBatch(db);
+    let count = 0;
+    const now = new Date().toISOString();
+
+    for (const rec of initial.records.slice(0, 45)) {
+      const idVal = (rec.hunterId || rec.id).trim();
+      const norm = getNormalizedIdentifier(idVal);
+      const docId = `live-${norm.replace(/[^A-Z0-9]/g, '_')}`;
+      const docRef = doc(db, LIVE_IDENTIFIERS_COLLECTION, docId);
+
+      batch.set(
+        docRef,
+        cleanForFirestore({
+          id: docId,
+          identifier: idVal,
+          normalizedIdentifier: norm,
+          bankName: rec.bankName,
+          details: rec.details || rec.name || 'Hunter Reference Identifier',
+          source: 'System Reference Dataset',
+          status: 'approved',
+          createdBy: 'System Migration',
+          createdAt: now,
+          updatedAt: now,
+          approvedBy: 'System Migration',
+          approvedAt: now,
+          hunterId: idVal,
+          rawColumns: rec.rawColumns || {},
+        }),
+        { merge: true }
+      );
+      count++;
+    }
+
+    await batch.commit();
+    return count;
+  } catch (err) {
+    console.warn('Seeding live_identifiers note:', err);
+    return 0;
   }
 };
 
