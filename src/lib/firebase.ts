@@ -1475,6 +1475,30 @@ export const searchBothHunterCollections = async (
 
   await ensureAuth();
   const norm = normalizeIdentifier(queryText);
+  const normId = getNormalizedIdentifier(queryText);
+
+  // 0. Parallel targeted queries on master live_identifiers with limit
+  const liveQueries: Promise<any>[] = [];
+  const liveCol = collection(db, LIVE_IDENTIFIERS_COLLECTION);
+  liveQueries.push(getDocs(query(liveCol, where('normalizedIdentifier', '==', normId), limit(25))).catch(() => null));
+  liveQueries.push(getDocs(query(liveCol, where('identifier', '==', queryText), limit(25))).catch(() => null));
+  liveQueries.push(getDocs(query(liveCol, where('identifierLower', '==', norm.lower), limit(25))).catch(() => null));
+  if (norm.clean) {
+    liveQueries.push(getDocs(query(liveCol, where('identifierClean', '==', norm.clean), limit(25))).catch(() => null));
+  }
+  if (normId.length >= 3) {
+    liveQueries.push(
+      getDocs(
+        query(
+          liveCol,
+          where('normalizedIdentifier', '>=', normId),
+          where('normalizedIdentifier', '<=', normId + '\uf8ff'),
+          limit(25)
+        )
+      ).catch(() => null)
+    );
+  }
+  liveQueries.push(getDocs(query(liveCol, limit(150))).catch(() => null));
 
   // 1. Parallel targeted queries on hunter_records with limit (max 25 docs per query)
   const hunterQueries: Promise<any>[] = [];
@@ -1536,12 +1560,40 @@ export const searchBothHunterCollections = async (
   // Also query recent manual_identifiers so partial token, details, and bank searches find them
   manualQueries.push(getDocs(query(manualCol, limit(100))).catch(() => null));
 
-  const [hunterSnaps, manualSnaps] = await Promise.all([
+  const [liveSnaps, hunterSnaps, manualSnaps] = await Promise.all([
+    Promise.all(liveQueries),
     Promise.all(hunterQueries),
     Promise.all(manualQueries),
   ]);
 
   const rawMatches = new Map<string, any>();
+
+  // Collect matching docs from master live_identifiers (Highest priority)
+  for (const snap of liveSnaps) {
+    if (snap && snap.docs) {
+      snap.docs.forEach((docSnap: any) => {
+        const data = docSnap.data();
+        if (data.status === 'approved' || data.status === 'live' || !data.status) {
+          const idVal = (data.identifier || data.hunterId || docSnap.id || '').toString().trim();
+          const idKey = docSnap.id || idVal;
+          if (!rawMatches.has(idKey)) {
+            rawMatches.set(idKey, {
+              ...data,
+              id: docSnap.id,
+              identifier: idVal,
+              hunterId: idVal,
+              normalizedIdentifier: data.normalizedIdentifier || getNormalizedIdentifier(idVal),
+              bankName: data.bankName || '',
+              details: data.details || data.name || data.remarks || '',
+              _collection: 'live_identifiers',
+              source: data.source || 'Cloud Firestore (Live)',
+              status: data.status || 'approved',
+            });
+          }
+        }
+      });
+    }
+  }
 
   // Collect matching docs from hunter_records
   for (const snap of hunterSnaps) {
@@ -1983,10 +2035,11 @@ export const LIVE_IDENTIFIERS_COLLECTION = 'live_identifiers';
 export const SUBMISSIONS_COLLECTION = 'submissions';
 
 /**
- * Standardize identifier string: uppercase, trimmed for strict indexing & exact match
+ * Standardize identifier string: strip all spaces, hyphens, and symbols, then uppercase.
+ * For example, "ABC-123", "abc123", and "ABC 123" all normalize to "ABC123".
  */
 export const getNormalizedIdentifier = (raw: string): string => {
-  return (raw || '').trim().toUpperCase();
+  return (raw || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
 };
 
 /**
@@ -2028,10 +2081,11 @@ export const subscribeToLiveIdentifiers = (
           const d = docSnap.data();
           // Public users only see approved/live records
           if (d.status === 'approved' || d.status === 'live' || !d.status) {
+            const rawId = d.identifier || docSnap.id;
             liveList.push({
               id: docSnap.id,
-              identifier: d.identifier || docSnap.id,
-              normalizedIdentifier: d.normalizedIdentifier || getNormalizedIdentifier(d.identifier || docSnap.id),
+              identifier: rawId,
+              normalizedIdentifier: d.normalizedIdentifier || getNormalizedIdentifier(rawId),
               bankName: d.bankName || 'Financial Institution',
               details: d.details || d.name || d.remarks || 'Approved Hunter Identifier',
               source: d.source || 'Cloud Firestore',
@@ -2042,8 +2096,8 @@ export const subscribeToLiveIdentifiers = (
               updatedAt: d.updatedAt,
               approvedBy: d.approvedBy,
               approvedAt: d.approvedAt,
-              hunterId: d.identifier || docSnap.id,
-              name: d.name || d.identifier || docSnap.id,
+              hunterId: rawId,
+              name: d.name || rawId,
               rawColumns: d.rawColumns || {},
             });
           }
@@ -2255,14 +2309,32 @@ export const approveSubmissionInFirestore = async (
     existingSub?.identifier ||
     (typeof submissionOrId === 'string' ? submissionOrId : '');
   const normId = getNormalizedIdentifier(finalIdentifier);
-  const liveDocId =
-    existingSub?.existingRecordId || `live-${normId.replace(/[^A-Z0-9]/g, '_') || Date.now()}`;
+  const lower = finalIdentifier.trim().toLowerCase();
+  const clean = normId.toLowerCase();
+
+  // Find if this identifier already exists in live_identifiers (e.g. for updates)
+  let liveDocId = existingSub?.existingRecordId || (existingSub as any)?.targetRecordId || '';
+  if (!liveDocId) {
+    try {
+      const matchSnap = await getDocs(
+        query(collection(db, LIVE_IDENTIFIERS_COLLECTION), where('normalizedIdentifier', '==', normId), limit(1))
+      );
+      if (!matchSnap.empty) {
+        liveDocId = matchSnap.docs[0].id;
+      }
+    } catch (e) {}
+  }
+  if (!liveDocId) {
+    liveDocId = `live-${normId.replace(/[^A-Z0-9]/g, '_') || Date.now()}`;
+  }
   const liveDocRef = doc(db, LIVE_IDENTIFIERS_COLLECTION, liveDocId);
 
-  const livePayload: LiveIdentifierRecord = {
+  const livePayload: any = {
     id: liveDocId,
     identifier: finalIdentifier,
     normalizedIdentifier: normId,
+    identifierLower: lower,
+    identifierClean: clean,
     bankName: adjustedData?.bankName || existingSub?.bankName || 'Financial Institution',
     details: adjustedData?.details || existingSub?.details || 'Approved Hunter Identifier',
     source: adjustedData?.source || existingSub?.source || 'Public Contribution (Approved)',
@@ -2274,7 +2346,16 @@ export const approveSubmissionInFirestore = async (
     approvedBy: adminName || 'Administrator',
     approvedAt: now,
     hunterId: finalIdentifier,
+    name: finalIdentifier,
     submissionId: existingSub?.submissionId || subId,
+    rawColumns: {
+      'Hunter Identification Number': finalIdentifier,
+      'Bank/NBFC Name': adjustedData?.bankName || existingSub?.bankName || 'Financial Institution',
+      'Status': 'approved',
+      'Approved By': adminName || 'Administrator',
+      'Approved At': now,
+      ...((existingSub as any)?.rawColumns || {}),
+    },
   };
 
   await setDoc(liveDocRef, cleanForFirestore(livePayload), { merge: true });
@@ -2322,14 +2403,18 @@ export const adminDirectAddLiveIdentifier = async (
 ): Promise<string> => {
   const cleanId = record.identifier.trim();
   const normId = getNormalizedIdentifier(cleanId);
+  const lower = cleanId.toLowerCase();
+  const clean = normId.toLowerCase();
   const now = new Date().toISOString();
   const docId = `live-${normId.replace(/[^A-Z0-9]/g, '_') || Date.now()}`;
   const liveDocRef = doc(db, LIVE_IDENTIFIERS_COLLECTION, docId);
 
-  const livePayload: LiveIdentifierRecord = {
+  const livePayload: any = {
     id: docId,
     identifier: cleanId,
     normalizedIdentifier: normId,
+    identifierLower: lower,
+    identifierClean: clean,
     bankName: record.bankName.trim(),
     details: (record.details || 'Admin Registered Identifier').trim(),
     source: (record.source || 'Admin Direct Registration').trim(),
@@ -2341,6 +2426,7 @@ export const adminDirectAddLiveIdentifier = async (
     approvedBy: adminName || 'Administrator',
     approvedAt: now,
     hunterId: cleanId,
+    name: cleanId,
     rawColumns: record.rawColumns || {},
   };
 
@@ -2366,12 +2452,39 @@ export const adminDirectUpdateLiveIdentifier = async (
   };
 
   if (updates.identifier) {
-    cleanUpdates.identifier = updates.identifier.trim();
-    cleanUpdates.normalizedIdentifier = getNormalizedIdentifier(updates.identifier);
-    cleanUpdates.hunterId = cleanUpdates.identifier;
+    const rawId = updates.identifier.trim();
+    const norm = getNormalizedIdentifier(rawId);
+    cleanUpdates.identifier = rawId;
+    cleanUpdates.normalizedIdentifier = norm;
+    cleanUpdates.identifierLower = rawId.toLowerCase();
+    cleanUpdates.identifierClean = norm.toLowerCase();
+    cleanUpdates.hunterId = rawId;
+    cleanUpdates.name = rawId;
   }
 
-  await updateDoc(liveDocRef, cleanForFirestore(cleanUpdates));
+  try {
+    const snap = await getDoc(liveDocRef);
+    if (snap.exists()) {
+      await updateDoc(liveDocRef, cleanForFirestore(cleanUpdates));
+      return;
+    }
+  } catch (e) {}
+
+  // If recordId not found, query by normalizedIdentifier
+  const targetId = updates.identifier || recordId;
+  const targetNorm = getNormalizedIdentifier(targetId);
+  try {
+    const qSnap = await getDocs(
+      query(collection(db, LIVE_IDENTIFIERS_COLLECTION), where('normalizedIdentifier', '==', targetNorm), limit(1))
+    );
+    if (!qSnap.empty) {
+      await updateDoc(qSnap.docs[0].ref, cleanForFirestore(cleanUpdates));
+      return;
+    }
+  } catch (e) {}
+
+  // Fallback setDoc
+  await setDoc(liveDocRef, cleanForFirestore(cleanUpdates), { merge: true });
 };
 
 /**
@@ -2381,8 +2494,220 @@ export const adminDirectDeleteLiveIdentifier = async (
   recordId: string,
   _adminName?: string
 ): Promise<void> => {
-  const liveDocRef = doc(db, LIVE_IDENTIFIERS_COLLECTION, recordId);
-  await deleteDoc(liveDocRef);
+  try {
+    const liveDocRef = doc(db, LIVE_IDENTIFIERS_COLLECTION, recordId);
+    await deleteDoc(liveDocRef);
+  } catch (e) {}
+
+  const norm = getNormalizedIdentifier(recordId);
+  try {
+    const qSnap = await getDocs(
+      query(collection(db, LIVE_IDENTIFIERS_COLLECTION), where('normalizedIdentifier', '==', norm), limit(1))
+    );
+    if (!qSnap.empty) {
+      await deleteDoc(qSnap.docs[0].ref);
+    }
+  } catch (e) {}
+};
+
+/**
+ * Public & Admin Search Query: Queries the master 'live_identifiers' collection in Cloud Firestore
+ * - Strictly queries master live_identifiers
+ * - Normalizes query with getNormalizedIdentifier ("ABC-123", "abc123", "ABC 123" all match "ABC123")
+ * - Matches exact, prefix, substring, and fuzzy
+ * - Uses real-time in-memory cache to guarantee zero delay
+ */
+export const searchLiveIdentifiersInFirestore = async (
+  rawQuery: string,
+  liveRecordsCache: LiveIdentifierRecord[] = []
+): Promise<SearchResultItem[]> => {
+  const queryText = (rawQuery || '').trim();
+  if (!queryText) return [];
+
+  const normId = getNormalizedIdentifier(queryText);
+  const lower = queryText.toLowerCase();
+  const clean = normId.toLowerCase();
+
+  const rawMatches = new Map<string, LiveIdentifierRecord>();
+
+  // 1. Check in-memory real-time cache (populated by onSnapshot)
+  for (const r of liveRecordsCache) {
+    if (r.status === 'rejected') continue;
+    const rId = (r.identifier || r.hunterId || r.id || '').trim();
+    const rNorm = r.normalizedIdentifier || getNormalizedIdentifier(rId);
+    const rLower = rId.toLowerCase();
+    const rClean = rNorm.toLowerCase();
+
+    const isMatch =
+      rNorm === normId ||
+      rId === queryText ||
+      rLower === lower ||
+      rClean === clean ||
+      (normId.length >= 3 && rNorm.includes(normId)) ||
+      (normId.length >= 3 && normId.includes(rNorm)) ||
+      rLower.includes(lower) ||
+      (r.bankName && r.bankName.toLowerCase().includes(lower)) ||
+      (r.details && r.details.toLowerCase().includes(lower));
+
+    if (isMatch) {
+      rawMatches.set(r.id, r);
+    }
+  }
+
+  // 2. Query Cloud Firestore live_identifiers collection
+  if (isFirebaseConfigured) {
+    try {
+      const colRef = collection(db, LIVE_IDENTIFIERS_COLLECTION);
+      const queries: Promise<any>[] = [
+        getDocs(query(colRef, where('normalizedIdentifier', '==', normId), limit(25))).catch(() => null),
+        getDocs(query(colRef, where('identifier', '==', queryText), limit(25))).catch(() => null),
+        getDocs(query(colRef, where('identifierLower', '==', lower), limit(25))).catch(() => null),
+      ];
+
+      if (clean) {
+        queries.push(getDocs(query(colRef, where('identifierClean', '==', clean), limit(25))).catch(() => null));
+      }
+
+      if (normId.length >= 3) {
+        queries.push(
+          getDocs(
+            query(
+              colRef,
+              where('normalizedIdentifier', '>=', normId),
+              where('normalizedIdentifier', '<=', normId + '\uf8ff'),
+              limit(25)
+            )
+          ).catch(() => null)
+        );
+      }
+
+      // Also grab recently modified documents to ensure full freshness
+      queries.push(getDocs(query(colRef, limit(150))).catch(() => null));
+
+      const snapshots = await Promise.all(queries);
+      for (const snap of snapshots) {
+        if (snap && snap.docs) {
+          snap.docs.forEach((docSnap: any) => {
+            const d = docSnap.data();
+            if (d.status === 'approved' || d.status === 'live' || !d.status) {
+              const docId = docSnap.id;
+              const rId = (d.identifier || docId).trim();
+              const rNorm = d.normalizedIdentifier || getNormalizedIdentifier(rId);
+              const rLower = rId.toLowerCase();
+              const rClean = rNorm.toLowerCase();
+
+              const isMatch =
+                rNorm === normId ||
+                rId === queryText ||
+                rLower === lower ||
+                rClean === clean ||
+                (normId.length >= 3 && rNorm.includes(normId)) ||
+                (normId.length >= 3 && normId.includes(rNorm)) ||
+                rLower.includes(lower) ||
+                (d.bankName && d.bankName.toLowerCase().includes(lower)) ||
+                (d.details && d.details.toLowerCase().includes(lower));
+
+              if (isMatch && !rawMatches.has(docId)) {
+                rawMatches.set(docId, {
+                  id: docId,
+                  identifier: rId,
+                  normalizedIdentifier: rNorm,
+                  bankName: d.bankName || 'Financial Institution',
+                  details: d.details || 'Approved Hunter Identifier',
+                  source: d.source || 'Cloud Firestore',
+                  status: d.status || 'approved',
+                  createdBy: d.createdBy || 'Administrator',
+                  createdAt: d.createdAt || '',
+                  updatedBy: d.updatedBy,
+                  updatedAt: d.updatedAt,
+                  approvedBy: d.approvedBy,
+                  approvedAt: d.approvedAt,
+                  hunterId: rId,
+                  rawColumns: d.rawColumns || {},
+                });
+              }
+            }
+          });
+        }
+      }
+    } catch (err) {
+      console.warn('Cloud Firestore live search note:', err);
+    }
+  }
+
+  // 3. Format and Score each match
+  const results: SearchResultItem[] = [];
+  rawMatches.forEach((item) => {
+    const idVal = (item.identifier || item.hunterId || item.id || '').trim();
+    const itemNorm = item.normalizedIdentifier || getNormalizedIdentifier(idVal);
+    const itemLower = idVal.toLowerCase();
+    const itemClean = itemNorm.toLowerCase();
+
+    let score = 70;
+    let confidence: 'VERY_HIGH' | 'HIGH' | 'POSSIBLE' | 'LOW' = 'POSSIBLE';
+    let matchType = 'Partial Match';
+
+    if (itemNorm === normId || idVal === queryText || itemLower === lower || itemClean === clean) {
+      score = 100;
+      confidence = 'VERY_HIGH';
+      matchType = 'Exact Identifier Match';
+    } else if (itemNorm.startsWith(normId) || itemLower.startsWith(lower) || itemClean.startsWith(clean)) {
+      score = 95;
+      confidence = 'VERY_HIGH';
+      matchType = 'Prefix Match';
+    } else if ((normId.length >= 4 && itemNorm.includes(normId)) || (clean.length >= 4 && itemClean.includes(clean))) {
+      score = 90;
+      confidence = 'VERY_HIGH';
+      matchType = 'Identifier Substring Match';
+    } else if (item.bankName && item.bankName.toLowerCase().includes(lower)) {
+      score = 80;
+      confidence = 'HIGH';
+      matchType = 'Bank Name Match';
+    } else {
+      score = 75;
+      confidence = 'POSSIBLE';
+      matchType = 'Fuzzy Match';
+    }
+
+    const recItem: RecordItem = {
+      id: item.id,
+      hunterId: idVal,
+      identifier: idVal,
+      name: item.details || item.name || idVal,
+      bankName: item.bankName || 'Financial Institution',
+      details: item.details || 'Approved Hunter Identifier',
+      accountNumber: '',
+      mobile: '',
+      pan: '',
+      status: item.status || 'Approved',
+      notes: `Source: ${item.source || 'Cloud Firestore Live Master'}`,
+      uploadedBy: item.approvedBy || item.createdBy || 'Administrator',
+      uploadDate: item.approvedAt || item.createdAt || '',
+      lastUpdated: item.updatedAt || item.approvedAt || item.createdAt || '',
+      rawColumns: {
+        'Hunter Identification Number': idVal,
+        'Bank/NBFC Name': item.bankName,
+        'Status': item.status || 'Approved',
+        'Details': item.details || '',
+        'Source': item.source || 'Cloud Firestore',
+        ...(item.rawColumns || {}),
+      },
+    };
+
+    results.push({
+      record: recItem,
+      score,
+      confidence,
+      primaryMatchedField: 'Hunter Identification Number',
+      matchedFields: [
+        { field: 'Hunter Identification Number', value: idVal, score },
+        { field: 'Bank/NBFC Name', value: item.bankName, score: item.bankName?.toLowerCase().includes(lower) ? 85 : 50 },
+      ],
+    });
+  });
+
+  results.sort((a, b) => b.score - a.score);
+  return results;
 };
 
 /**

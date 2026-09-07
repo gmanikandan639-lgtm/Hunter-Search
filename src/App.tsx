@@ -56,6 +56,7 @@ import {
   syncAdminUserRoleInFirestore,
   syncUserProfileInFirestore,
   searchBothHunterCollections,
+  searchLiveIdentifiersInFirestore,
   seedDefaultHunterRecordsIfEmpty,
   subscribeToLiveIdentifiers,
   subscribeToSubmissions,
@@ -579,9 +580,17 @@ export default function App() {
       };
 
       try {
-        // Query BOTH hunter_records and manual_identifiers collections in Cloud Firestore
-        const firestoreResults = await searchBothHunterCollections(q, manualRecords);
+        // 1. Query master live_identifiers collection in Cloud Firestore (Public Search Source of Truth)
+        const liveResults = await searchLiveIdentifiersInFirestore(q, liveIdentifiers);
+        if (liveResults && liveResults.length > 0) {
+          setResults(liveResults);
+          logHistory(liveResults);
+          setIsSearching(false);
+          return;
+        }
 
+        // 2. Query secondary hunter_records and manual_identifiers in Cloud Firestore
+        const firestoreResults = await searchBothHunterCollections(q, manualRecords);
         if (firestoreResults && firestoreResults.length > 0) {
           setResults(firestoreResults);
           logHistory(firestoreResults);
@@ -589,7 +598,7 @@ export default function App() {
           return;
         }
 
-        // Fallback to client-side database search across combined records
+        // 3. Fallback to client-side database search across combined records
         const searchRes = searchDatabase(currentRecords, q, currentFilters);
         setResults(searchRes);
         logHistory(searchRes);
@@ -602,7 +611,7 @@ export default function App() {
         setIsSearching(false);
       }
     },
-    [combinedRecords, manualRecords]
+    [combinedRecords, manualRecords, liveIdentifiers]
   );
 
   // Run initial search on mount
@@ -610,13 +619,13 @@ export default function App() {
     performSearch(searchQuery, filters, combinedRecords);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-refresh active search results whenever real-time Firestore manual records or CSV datasets update
-  // Ensures normal users see Admin additions or updates without needing to refresh the page
+  // Auto-refresh active search results whenever real-time Firestore LIVE identifiers, manual records, or CSV datasets update
+  // Ensures normal users on Browser B see Admin additions or updates INSTANTLY without needing to refresh the page
   useEffect(() => {
     if (searchQuery.trim() && hasSearched) {
       performSearch(searchQuery, filters, combinedRecords);
     }
-  }, [manualRecords, combinedRecords.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [liveIdentifiers, manualRecords, combinedRecords]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Execute CSV upload to Firebase Cloud Storage and synchronization
   const executeUploadToStorage = async (file: File, parsed: ReturnType<typeof parseCSVText>) => {

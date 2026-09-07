@@ -158,6 +158,13 @@ export function calculateFieldScore(query: string, targetText: string): number {
     return 100;
   }
 
+  // 1a. Alphanumeric clean exact match (e.g. "ABC-123", "abc123", and "ABC 123" all match 100%)
+  const qClean = qNorm.replace(/[^a-z0-9]/g, '');
+  const tClean = tNorm.replace(/[^a-z0-9]/g, '');
+  if (qClean && tClean && qClean === tClean) {
+    return 100;
+  }
+
   // 1b. Hunter Identifier & Numerical Pattern Matching (Prefix, Last 3, Last 5, Middle digits)
   const qDigits = qNorm.replace(/\D/g, '');
   const tDigits = tNorm.replace(/\D/g, '');
@@ -340,7 +347,8 @@ export function searchDatabase(
       // 'ALL' or 'OTHER': evaluate all prominent columns + dynamic raw columns
       testField('Name', record.name);
       testField('Bank/NBFC Name', record.bankName, 1.0);
-      testField('Hunter Identification Number', record.hunterId, 0.98);
+      testField('Hunter Identification Number', record.identifier || record.hunterId, 1.0);
+      testField('Hunter ID', record.identifier || record.hunterId, 1.0);
       testField('Record ID', record.id, 0.95);
       testField('Account Number', record.accountNumber, 0.95);
       testField('Company', record.company, 0.90);

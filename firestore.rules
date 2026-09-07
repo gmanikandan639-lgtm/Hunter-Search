@@ -29,7 +29,8 @@ service cloud.firestore {
     // Normal/unauthenticated users CANNOT create, update, or delete live identifiers.
     // Admin users have full CREATE, UPDATE, DELETE permissions.
     match /live_identifiers/{recordId} {
-      allow read: if resource == null || resource.data.status in ['approved', 'live'] || isAdmin();
+      allow get: if resource == null || resource.data.status in ['approved', 'live', 'Active Reference'] || isAdmin();
+      allow list: if true;
       allow create, update, delete: if isAdmin();
     }
 
@@ -81,14 +82,16 @@ service cloud.firestore {
     // 4. Existing Data Preservation: hunter_records Collection
     // Public can read to search existing datasets; Admin manages.
     match /hunter_records/{recordId} {
-      allow read: if resource == null || resource.data.status in ['approved', 'live', null] || isAdmin();
+      allow get: if resource == null || resource.data.status in ['approved', 'live', null, 'Active Reference'] || isAdmin();
+      allow list: if true;
       allow create, update, delete: if isAdmin();
     }
 
     // 5. Existing Data Preservation: manual_identifiers Collection
     // Public can read approved manual records; Admin manages.
     match /manual_identifiers/{recordId} {
-      allow read: if resource == null || resource.data.status in ['approved', 'live', null] || isAdmin();
+      allow get: if resource == null || resource.data.status in ['approved', 'live', null, 'Active Reference'] || isAdmin();
+      allow list: if true;
       allow create, update, delete: if isAdmin();
     }
 
