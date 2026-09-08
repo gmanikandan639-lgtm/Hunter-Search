@@ -19,7 +19,13 @@ import {
   UserCheck,
 } from 'lucide-react';
 import { AdminSession } from '../types';
-import { signInWithGoogle, createDemoGoogleUser, syncUserProfileInFirestore } from '../lib/firebase';
+import {
+  signInWithGoogle,
+  createDemoGoogleUser,
+  syncUserProfileInFirestore,
+  ensureAdminFirebaseAuthenticated,
+  signInWithAdminCredentials,
+} from '../lib/firebase';
 
 interface AdminLoginProps {
   onLoginSuccess: (session: AdminSession) => void;
@@ -85,25 +91,34 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ onLoginSuccess, onCancel
   };
 
   // Quick Demo Admin Access for development / testing
-  const handleQuickAdminAccess = () => {
-    const demoUser = createDemoGoogleUser('gmanikandan639@gmail.com', 'Manikandan (Administrator)');
-    setSuccessNotice(true);
-    const newSession: AdminSession = {
-      isAuthenticated: true,
-      username: demoUser.email || 'gmanikandan639@gmail.com',
-      name: 'Manikandan',
-      role: 'Administrator',
-      system: 'Hunter Risk Management',
-      loginTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      token: demoUser.uid,
-    };
-    setTimeout(() => {
-      onLoginSuccess(newSession);
-    }, 300);
+  const handleQuickAdminAccess = async () => {
+    setIsLoading(true);
+    setErrorMessage(null);
+    try {
+      const fbUser = await ensureAdminFirebaseAuthenticated();
+      setSuccessNotice(true);
+      const newSession: AdminSession = {
+        isAuthenticated: true,
+        username: fbUser?.email || 'hunter_admin@fraudriskhub.com',
+        name: 'Manikandan',
+        role: 'Administrator',
+        system: 'Hunter Risk Management',
+        loginTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        token: fbUser?.uid || 'admin_token',
+      };
+      setTimeout(() => {
+        onLoginSuccess(newSession);
+      }, 300);
+    } catch (err: any) {
+      console.error('Quick admin error:', err);
+      setErrorMessage(err?.message || 'Failed to authenticate administrator session.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   // Authenticate against defined admin credentials
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
 
@@ -122,36 +137,30 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ onLoginSuccess, onCancel
 
     setIsLoading(true);
 
-    // Verify credentials with security handshake
-    setTimeout(() => {
-      if (
-        (trimmedUsername === 'Manikandan@FRH' && trimmedPassword === 'Manikandan@123') ||
-        (trimmedUsername.toLowerCase() === 'admin' && trimmedPassword === 'admin123') ||
-        (trimmedUsername === 'gmanikandan639@gmail.com' && trimmedPassword === 'Manikandan@123')
-      ) {
-        setSuccessNotice(true);
-        const newSession: AdminSession = {
-          isAuthenticated: true,
-          username: trimmedUsername,
-          name: 'Manikandan',
-          role: 'Administrator',
-          system: 'Hunter Search Management',
-          loginTime: new Date().toLocaleTimeString([], {
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit',
-          }),
-          token: `hs_auth_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
-        };
+    try {
+      const fbUser = await signInWithAdminCredentials(trimmedUsername, trimmedPassword);
+      setSuccessNotice(true);
+      const newSession: AdminSession = {
+        isAuthenticated: true,
+        username: trimmedUsername,
+        name: 'Manikandan',
+        role: 'Administrator',
+        system: 'Hunter Search Management',
+        loginTime: new Date().toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        }),
+        token: fbUser.uid,
+      };
 
-        setTimeout(() => {
-          onLoginSuccess(newSession);
-        }, 500);
-      } else {
-        setIsLoading(false);
-        setErrorMessage('Invalid username or password. Please verify your administrator credentials.');
-      }
-    }, 500);
+      setTimeout(() => {
+        onLoginSuccess(newSession);
+      }, 400);
+    } catch (err: any) {
+      setIsLoading(false);
+      setErrorMessage('Invalid username or password. Please verify your administrator credentials.');
+    }
   };
 
   return (

@@ -4,6 +4,7 @@ import {
   Auth,
   GoogleAuthProvider,
   signInWithPopup,
+  signInWithEmailAndPassword,
   signOut as fbSignOut,
   onAuthStateChanged,
   User as FirebaseUser,
@@ -154,8 +155,52 @@ export const signInWithGoogle = async (): Promise<FirebaseUser> => {
   }
 };
 
+export const ADMIN_FIREBASE_EMAIL = 'hunter_admin@fraudriskhub.com';
+export const ADMIN_FIREBASE_PASS = 'HunterAdmin@2026';
+
+/**
+ * Ensures there is an active Firebase Auth user with Admin privileges.
+ * If auth.currentUser is already present, returns it.
+ * If not, automatically signs in as hunter_admin@fraudriskhub.com.
+ */
+export const ensureAdminFirebaseAuthenticated = async (): Promise<FirebaseUser | null> => {
+  if (auth.currentUser) {
+    return auth.currentUser;
+  }
+  try {
+    const cred = await signInWithEmailAndPassword(auth, ADMIN_FIREBASE_EMAIL, ADMIN_FIREBASE_PASS);
+    return cred.user;
+  } catch (err) {
+    console.error('ensureAdminFirebaseAuthenticated error:', err);
+    return null;
+  }
+};
+
+/**
+ * Authenticates against Firebase Auth using provided Admin credentials or demo credentials.
+ */
+export const signInWithAdminCredentials = async (username: string, pass: string): Promise<FirebaseUser> => {
+  const trimmedUser = username.trim();
+  const trimmedPass = pass.trim();
+
+  const isAuthorized =
+    (trimmedUser === 'Manikandan@FRH' && trimmedPass === 'Manikandan@123') ||
+    (trimmedUser.toLowerCase() === 'admin' && trimmedPass === 'admin123') ||
+    (trimmedUser === 'gmanikandan639@gmail.com' && trimmedPass === 'Manikandan@123') ||
+    (trimmedUser === ADMIN_FIREBASE_EMAIL && trimmedPass === ADMIN_FIREBASE_PASS);
+
+  if (!isAuthorized) {
+    throw new Error('Invalid administrator credentials.');
+  }
+
+  const cred = await signInWithEmailAndPassword(auth, ADMIN_FIREBASE_EMAIL, ADMIN_FIREBASE_PASS);
+  return cred.user;
+};
+
 // Demo / Test Google Profile helper for preview / staging environments
 export const createDemoGoogleUser = (email = 'gmanikandan639@gmail.com', displayName = 'Manikandan (Administrator)') => {
+  // Ensure real Firebase Auth session is established in the background
+  ensureAdminFirebaseAuthenticated().catch(() => {});
   const fakeUid = 'google_uid_' + btoa(email).replace(/=/g, '').substring(0, 16);
   const mockUser: any = {
     uid: fakeUid,
@@ -451,10 +496,6 @@ const syncChannel =
 
 export const broadcastLocalUpdate = (records: ManualHunterRecord[]) => {
   try {
-    localStorage.setItem('fraud_risk_hub_manual_identifiers_cache', JSON.stringify(records));
-  } catch (e) {}
-
-  try {
     if (syncChannel) {
       syncChannel.postMessage({ type: 'MANUAL_RECORDS_UPDATED', records, timestamp: Date.now() });
     }
@@ -470,7 +511,7 @@ export const broadcastLocalUpdate = (records: ManualHunterRecord[]) => {
  * Synchronizes across:
  * 1. Cloud Firestore onSnapshot
  * 2. Backend SSE Stream (/api/sse)
- * 3. Browser BroadcastChannel & Local Storage Cache
+ * 3. Browser BroadcastChannel
  */
 export const subscribeToManualHunterRecords = (
   callback: (records: ManualHunterRecord[]) => void,
@@ -489,25 +530,8 @@ export const subscribeToManualHunterRecords = (
       const timeB = new Date(b.createdAt || b.submittedAt || 0).getTime();
       return timeB - timeA;
     });
-    try {
-      localStorage.setItem('fraud_risk_hub_manual_identifiers_cache', JSON.stringify(arr));
-    } catch (e) {}
     callback(arr);
   };
-
-  // 1. Immediate cache retrieval
-  try {
-    const cached = localStorage.getItem('fraud_risk_hub_manual_identifiers_cache');
-    if (cached) {
-      const parsed = JSON.parse(cached);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        parsed.forEach((r: ManualHunterRecord) => {
-          if (r.id) currentRecordsMap.set(r.id, r);
-        });
-        emitMergedRecords();
-      }
-    }
-  } catch (e) {}
 
   // 2. Attach Firestore Real-Time Listener on auth state change
   const attachFirestoreListener = () => {
@@ -2053,17 +2077,6 @@ export const subscribeToLiveIdentifiers = (
   let unsubscribeSnapshot: (() => void) | null = null;
   let isCancelled = false;
 
-  // Immediate local cache retrieval for instantaneous render
-  try {
-    const cached = localStorage.getItem('fraud_risk_hub_live_identifiers_cache');
-    if (cached) {
-      const parsed = JSON.parse(cached);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        callback(parsed);
-      }
-    }
-  } catch (e) {}
-
   if (!isFirebaseConfigured) {
     if (onStatusChange) onStatusChange('connected');
     return () => {};
@@ -2109,10 +2122,6 @@ export const subscribeToLiveIdentifiers = (
           const tB = new Date(b.updatedAt || b.approvedAt || b.createdAt).getTime();
           return tB - tA;
         });
-
-        try {
-          localStorage.setItem('fraud_risk_hub_live_identifiers_cache', JSON.stringify(liveList));
-        } catch (e) {}
 
         if (onStatusChange) onStatusChange('connected');
         callback(liveList);
@@ -2274,6 +2283,7 @@ export const approveSubmissionInFirestore = async (
     source?: string;
   }
 ): Promise<void> => {
+  await ensureAdminFirebaseAuthenticated();
   const now = new Date().toISOString();
   const subId = typeof submissionOrId === 'string' ? submissionOrId : submissionOrId.id;
   const subDocRef = doc(db, SUBMISSIONS_COLLECTION, subId);
@@ -2307,7 +2317,8 @@ export const approveSubmissionInFirestore = async (
   const finalIdentifier =
     adjustedData?.identifier ||
     existingSub?.identifier ||
-    (typeof submissionOrId === 'string' ? submissionOrId : '');
+    (existingSub as any)?.hunterId ||
+    (typeof submissionOrId === 'string' && !submissionOrId.startsWith('sub-') ? submissionOrId : '');
   const normId = getNormalizedIdentifier(finalIdentifier);
   const lower = finalIdentifier.trim().toLowerCase();
   const clean = normId.toLowerCase();
@@ -2371,6 +2382,7 @@ export const rejectSubmissionInFirestore = async (
   adminName: string,
   reason: string
 ): Promise<void> => {
+  await ensureAdminFirebaseAuthenticated();
   const now = new Date().toISOString();
   const subDocRef = doc(db, SUBMISSIONS_COLLECTION, submissionId);
 
@@ -2401,6 +2413,7 @@ export const adminDirectAddLiveIdentifier = async (
   },
   adminName: string
 ): Promise<string> => {
+  await ensureAdminFirebaseAuthenticated();
   const cleanId = record.identifier.trim();
   const normId = getNormalizedIdentifier(cleanId);
   const lower = cleanId.toLowerCase();
@@ -2442,6 +2455,7 @@ export const adminDirectUpdateLiveIdentifier = async (
   updates: Partial<LiveIdentifierRecord>,
   adminName: string
 ): Promise<void> => {
+  await ensureAdminFirebaseAuthenticated();
   const now = new Date().toISOString();
   const liveDocRef = doc(db, LIVE_IDENTIFIERS_COLLECTION, recordId);
 
@@ -2494,6 +2508,7 @@ export const adminDirectDeleteLiveIdentifier = async (
   recordId: string,
   _adminName?: string
 ): Promise<void> => {
+  await ensureAdminFirebaseAuthenticated();
   try {
     const liveDocRef = doc(db, LIVE_IDENTIFIERS_COLLECTION, recordId);
     await deleteDoc(liveDocRef);

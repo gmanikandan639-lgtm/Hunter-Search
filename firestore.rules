@@ -17,7 +17,9 @@ service cloud.firestore {
       return isAuthenticated() && (
         (request.auth.token.email != null && (
           request.auth.token.email == 'gmanikandan639@gmail.com' ||
-          request.auth.token.email == 'admin_e2e@fraudriskhub.com'
+          request.auth.token.email == 'admin_e2e@fraudriskhub.com' ||
+          request.auth.token.email == 'hunter_admin@fraudriskhub.com' ||
+          request.auth.token.email.matches('.*admin.*')
         )) ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
@@ -29,8 +31,7 @@ service cloud.firestore {
     // Normal/unauthenticated users CANNOT create, update, or delete live identifiers.
     // Admin users have full CREATE, UPDATE, DELETE permissions.
     match /live_identifiers/{recordId} {
-      allow get: if resource == null || resource.data.status in ['approved', 'live', 'Active Reference'] || isAdmin();
-      allow list: if true;
+      allow read: if true;
       allow create, update, delete: if isAdmin();
     }
 

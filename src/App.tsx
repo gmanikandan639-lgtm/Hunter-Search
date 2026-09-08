@@ -71,8 +71,12 @@ import {
   SubmissionRecord,
 } from './lib/firebase';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
+import { useBrowserProtection } from './hooks/useBrowserProtection';
 
 export default function App() {
+  // Activate client-side deterrent against right-click and common inspection shortcuts
+  useBrowserProtection();
+
   const [activePage, setActivePage] = useState<ActiveNavPage>('search');
   const [liveSyncStatus, setLiveSyncStatus] = useState<LiveSyncStatus>('connected');
   const [googleUser, setGoogleUser] = useState<FirebaseUser | null>(null);
@@ -148,7 +152,7 @@ export default function App() {
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [isUploading, setIsUploading] = useState<boolean>(false);
 
-  // Combined Active Search Set: Cloud Firestore LIVE Identifiers + Manual Records + Dataset Records
+  // Combined Active Search Set: Cloud Firestore LIVE Identifiers as Single Source of Truth
   const combinedRecords = useMemo(() => {
     const seenIds = new Set<string>();
     const result: RecordItem[] = [];
@@ -186,51 +190,20 @@ export default function App() {
       }
     });
 
-    // 2. Secondary: Active Manual Records
-    const activeManual = manualRecords.filter((m) => m.approvalStatus !== 'rejected');
-    activeManual.forEach((m) => {
-      const idVal = (m.hunterId || (m as any).identifier || m.id || '').toString().trim();
-      const key = idVal.toUpperCase();
-      if (!seenIds.has(key)) {
-        seenIds.add(key);
-        result.push({
-          id: m.id,
-          hunterId: idVal,
-          identifier: idVal,
-          name: m.name || m.details || idVal,
-          bankName: m.bankName || 'Unknown Financial Institution',
-          details: m.details || m.remarks || m.notes || 'Manual Identifier Record',
-          accountNumber: m.accountNumber || '',
-          mobile: m.mobile || '',
-          pan: m.pan || '',
-          status: m.status || 'Active Reference',
-          notes: m.remarks || m.notes || m.details || 'Registered Hunter Record',
-          uploadedBy: m.submittedBy?.name || m.createdBy || 'Administrator',
-          uploadDate: m.submittedAt || m.createdAt || '',
-          lastUpdated: m.updatedAt || m.createdAt || '',
-          rawColumns: {
-            'Hunter Identification Number': idVal,
-            'Bank/NBFC Name': m.bankName,
-            'Status': m.status || '',
-            'Remarks': m.remarks || m.notes || m.details || '',
-            ...(m.rawColumns || {}),
-          },
-        });
-      }
-    });
-
-    // 3. Fallback: CSV Dataset Records
-    records.forEach((r) => {
-      const idVal = (r.hunterId || r.id || '').toString().trim();
-      const key = idVal.toUpperCase();
-      if (!seenIds.has(key)) {
-        seenIds.add(key);
-        result.push(r);
-      }
-    });
+    // 2. Initial fallback to default reference records ONLY if Firestore liveIdentifiers hasn't loaded yet
+    if (liveIdentifiers.length === 0 && records.length > 0) {
+      records.forEach((r) => {
+        const idVal = (r.hunterId || r.id || '').toString().trim();
+        const key = idVal.toUpperCase();
+        if (!seenIds.has(key)) {
+          seenIds.add(key);
+          result.push(r);
+        }
+      });
+    }
 
     return result;
-  }, [liveIdentifiers, manualRecords, records]);
+  }, [liveIdentifiers, records]);
 
   // Combined Unique Banks
   const combinedUniqueBanks = useMemo(() => {
@@ -1125,6 +1098,34 @@ export default function App() {
     adminName: string,
     adjustedData?: Partial<ManualHunterRecord>
   ) => {
+    const targetManual = manualRecords.find((r) => r.id === submissionId);
+    const targetSub = submissionsList.find(
+      (s) => s.id === submissionId || s.submissionId === submissionId
+    );
+
+    const effectiveHunterId =
+      adjustedData?.hunterId ||
+      targetManual?.hunterId ||
+      (targetManual as any)?.identifier ||
+      targetSub?.identifier ||
+      submissionId;
+
+    const effectiveBank =
+      adjustedData?.bankName ||
+      targetManual?.bankName ||
+      targetSub?.bankName ||
+      'Financial Institution';
+
+    const effectiveDetails =
+      adjustedData?.remarks ||
+      adjustedData?.notes ||
+      adjustedData?.name ||
+      targetManual?.remarks ||
+      targetManual?.notes ||
+      targetManual?.name ||
+      targetSub?.details ||
+      effectiveHunterId;
+
     // Optimistic UI update
     setManualRecords((prev) =>
       prev.map((r) =>
@@ -1132,6 +1133,8 @@ export default function App() {
           ? {
               ...r,
               ...(adjustedData || {}),
+              hunterId: effectiveHunterId,
+              bankName: effectiveBank,
               approvalStatus: 'approved',
               reviewedBy: adminName,
               reviewedAt: new Date().toISOString(),
@@ -1147,22 +1150,25 @@ export default function App() {
     try {
       // 1. Promote to master live_identifiers in Cloud Firestore
       await approveSubmissionInFirestore(submissionId, adminName, {
-        identifier: adjustedData?.hunterId,
-        bankName: adjustedData?.bankName,
-        details: adjustedData?.remarks || adjustedData?.notes || adjustedData?.name,
+        identifier: effectiveHunterId,
+        bankName: effectiveBank,
+        details: effectiveDetails,
       });
 
       // 2. Legacy collection sync
-      await approveUserHunterSubmissionInFirestore(submissionId, adminName, adjustedData);
+      await approveUserHunterSubmissionInFirestore(submissionId, adminName, {
+        ...adjustedData,
+        hunterId: effectiveHunterId,
+        bankName: effectiveBank,
+      });
     } catch (err) {
       console.warn('Firestore approval sync note:', err);
     }
 
-    const target = manualRecords.find((r) => r.id === submissionId);
     triggerToast({
       type: 'success',
       title: '✓ Identifier Approved & Live',
-      message: `Record "${target?.hunterId || submissionId}" is now live and searchable across all users.`,
+      message: `Record "${effectiveHunterId}" is now live and searchable across all users.`,
     });
   };
 
