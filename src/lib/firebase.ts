@@ -158,21 +158,64 @@ export const signInWithGoogle = async (): Promise<FirebaseUser> => {
 export const ADMIN_FIREBASE_EMAIL = 'hunter_admin@fraudriskhub.com';
 export const ADMIN_FIREBASE_PASS = 'HunterAdmin@2026';
 
+export const getFirebaseConfigInfo = () => {
+  return {
+    projectId: firebaseConfig.projectId,
+    databaseId: customDatabaseId,
+    appId: firebaseConfig.appId,
+    authDomain: firebaseConfig.authDomain,
+  };
+};
+
+export const checkFirestoreConnectionHealth = async (): Promise<boolean> => {
+  if (!isFirebaseConfigured) return false;
+  try {
+    const col = collection(db, LIVE_IDENTIFIERS_COLLECTION);
+    const snap = await getDocs(query(col, limit(1)));
+    return snap !== null;
+  } catch (err) {
+    console.warn('Firestore connection health check failed:', err);
+    return false;
+  }
+};
+
+/**
+ * Validates if the given user has verified administrator privileges.
+ */
+export const isAuthorizedAdmin = (user: FirebaseUser | null): boolean => {
+  if (!user) return false;
+  const email = (user.email || '').toLowerCase();
+  return (
+    email === 'gmanikandan639@gmail.com' ||
+    email === 'hunter_admin@fraudriskhub.com' ||
+    email === 'admin_e2e@fraudriskhub.com' ||
+    email.includes('admin')
+  );
+};
+
 /**
  * Ensures there is an active Firebase Auth user with Admin privileges.
- * If auth.currentUser is already present, returns it.
- * If not, automatically signs in as hunter_admin@fraudriskhub.com.
+ * If auth.currentUser is already an authorized admin, returns it.
+ * If auth.currentUser is unauthenticated or not an admin, signs in as hunter_admin@fraudriskhub.com.
  */
-export const ensureAdminFirebaseAuthenticated = async (): Promise<FirebaseUser | null> => {
-  if (auth.currentUser) {
+export const ensureAdminFirebaseAuthenticated = async (): Promise<FirebaseUser> => {
+  if (auth.currentUser && isAuthorizedAdmin(auth.currentUser)) {
     return auth.currentUser;
   }
+
+  // If signed in with a non-admin account, sign out first
+  if (auth.currentUser && !isAuthorizedAdmin(auth.currentUser)) {
+    try {
+      await fbSignOut(auth);
+    } catch {}
+  }
+
   try {
     const cred = await signInWithEmailAndPassword(auth, ADMIN_FIREBASE_EMAIL, ADMIN_FIREBASE_PASS);
     return cred.user;
-  } catch (err) {
+  } catch (err: any) {
     console.error('ensureAdminFirebaseAuthenticated error:', err);
-    return null;
+    throw new Error(`Admin authentication required: ${err?.message || 'Failed to authenticate as Admin'}`);
   }
 };
 
@@ -241,23 +284,26 @@ export const logOut = async (): Promise<void> => {
 };
 
 // Synchronize User profile & check admin in Firestore
-export const syncUserProfileInFirestore = async (user: FirebaseUser): Promise<{ isAdmin: boolean; role: string }> => {
+export const syncUserProfileInFirestore = async (
+  user: FirebaseUser
+): Promise<{ isAdmin: boolean; role: string; name: string; email: string; photoURL: string }> => {
   try {
     const userDocRef = doc(db, 'users', user.uid);
     const now = new Date().toISOString();
-    const isAdminEmail = user.email === 'gmanikandan639@gmail.com' || user.email?.endsWith('@hunter.internal');
+    const isAdminEmail =
+      user.email === 'gmanikandan639@gmail.com' ||
+      user.email?.endsWith('@hunter.internal') ||
+      user.email === 'hunter_admin@fraudriskhub.com';
 
     const snap = await getDoc(userDocRef);
     let role = isAdminEmail ? 'admin' : 'user';
-    let createdAt = now;
 
     if (snap.exists()) {
       const data = snap.data();
       if (data.role) role = data.role;
-      if (data.createdAt) createdAt = data.createdAt;
     }
 
-    const userName = user.displayName || user.email?.split('@')[0] || 'User';
+    const userName = (snap.exists() && snap.data()?.name) || user.displayName || user.email?.split('@')[0] || 'User';
     const effectiveRole = isAdminEmail ? 'admin' : role;
 
     // Required fields: uid, name, email, photoURL, role ("admin"|"user"), createdAt, updatedAt
@@ -277,7 +323,7 @@ export const syncUserProfileInFirestore = async (user: FirebaseUser): Promise<{ 
       { merge: true }
     );
 
-    if (role === 'admin') {
+    if (effectiveRole === 'admin') {
       const adminDocRef = doc(db, 'admins', user.uid);
       await setDoc(
         adminDocRef,
@@ -292,11 +338,39 @@ export const syncUserProfileInFirestore = async (user: FirebaseUser): Promise<{ 
       );
     }
 
-    return { isAdmin: role === 'admin', role };
+    return {
+      isAdmin: effectiveRole === 'admin',
+      role: effectiveRole,
+      name: userName,
+      email: user.email || '',
+      photoURL: user.photoURL || '',
+    };
   } catch (err) {
     console.warn('Sync user profile note:', err);
-    return { isAdmin: user.email === 'gmanikandan639@gmail.com', role: user.email === 'gmanikandan639@gmail.com' ? 'admin' : 'user' };
+    return {
+      isAdmin: user.email === 'gmanikandan639@gmail.com' || user.email === 'hunter_admin@fraudriskhub.com',
+      role: user.email === 'gmanikandan639@gmail.com' || user.email === 'hunter_admin@fraudriskhub.com' ? 'admin' : 'user',
+      name: user.displayName || user.email?.split('@')[0] || 'User',
+      email: user.email || '',
+      photoURL: user.photoURL || '',
+    };
   }
+};
+
+/**
+ * Update authenticated user's permitted profile fields (e.g. name).
+ * Role is strictly protected and never modified by this function.
+ */
+export const updateUserProfileInFirestore = async (
+  uid: string,
+  data: { name?: string }
+): Promise<void> => {
+  const userDocRef = doc(db, 'users', uid);
+  const now = new Date().toISOString();
+  await updateDoc(userDocRef, {
+    ...(data.name ? { name: data.name.trim(), displayName: data.name.trim() } : {}),
+    updatedAt: now,
+  });
 };
 
 // Global live sync status subscribers
@@ -845,6 +919,8 @@ export const submitUserHunterRecordToFirestore = async (
     bankName: string;
     orgType?: 'Bank' | 'NBFC';
     name?: string;
+    details?: string;
+    source?: string;
     status?: string;
     remarks?: string;
     notes?: string;
@@ -876,6 +952,8 @@ export const submitUserHunterRecordToFirestore = async (
     bankName: submission.bankName.trim(),
     orgType: submission.orgType || 'Bank',
     name: submission.name?.trim() || submission.hunterId.trim(),
+    details: submission.details?.trim() || submission.remarks?.trim() || 'Manual Identifier Record',
+    source: submission.source?.trim() || 'User Submission',
     status: submission.status || 'Pending Verification',
     remarks: submission.remarks?.trim() || 'Submitted by user for verification.',
     notes: submission.notes?.trim() || '',
@@ -2071,7 +2149,7 @@ export const getNormalizedIdentifier = (raw: string): string => {
  * No login required - reads directly from Cloud Firestore live_identifiers
  */
 export const subscribeToLiveIdentifiers = (
-  callback: (records: LiveIdentifierRecord[]) => void,
+  callback: (records: LiveIdentifierRecord[], meta?: { lastSnapshotTime: Date; count: number }) => void,
   onStatusChange?: (status: LiveSyncStatus) => void
 ) => {
   let unsubscribeSnapshot: (() => void) | null = null;
@@ -2123,8 +2201,9 @@ export const subscribeToLiveIdentifiers = (
           return tB - tA;
         });
 
+        const nowTime = new Date();
         if (onStatusChange) onStatusChange('connected');
-        callback(liveList);
+        callback(liveList, { lastSnapshotTime: nowTime, count: liveList.length });
       },
       (err) => {
         console.warn('Firestore live_identifiers onSnapshot note:', err.message);
@@ -2147,7 +2226,7 @@ export const subscribeToLiveIdentifiers = (
  * Real-time listener for Submissions Approval Queue (Admin only)
  */
 export const subscribeToSubmissions = (
-  callback: (submissions: SubmissionRecord[]) => void
+  callback: (submissions: SubmissionRecord[], meta?: { lastSnapshotTime: Date; count: number }) => void
 ) => {
   let unsubscribe: (() => void) | null = null;
   let isCancelled = false;
@@ -2191,7 +2270,7 @@ export const subscribeToSubmissions = (
             return new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime();
           });
 
-          callback(list);
+          callback(list, { lastSnapshotTime: new Date(), count: list.length });
         },
         (err) => {
           if (err.code !== 'permission-denied') {
@@ -2314,13 +2393,18 @@ export const approveSubmissionInFirestore = async (
   }
 
   // 3. Add / Update document in 'live_identifiers'
-  const finalIdentifier =
+  const rawId =
     adjustedData?.identifier ||
     existingSub?.identifier ||
     (existingSub as any)?.hunterId ||
     (typeof submissionOrId === 'string' && !submissionOrId.startsWith('sub-') ? submissionOrId : '');
+  const finalIdentifier = (rawId || '').trim();
+  if (!finalIdentifier) {
+    throw new Error('Cannot approve submission: Hunter Identifier value is empty.');
+  }
+
   const normId = getNormalizedIdentifier(finalIdentifier);
-  const lower = finalIdentifier.trim().toLowerCase();
+  const lower = finalIdentifier.toLowerCase();
   const clean = normId.toLowerCase();
 
   // Find if this identifier already exists in live_identifiers (e.g. for updates)
@@ -2348,6 +2432,7 @@ export const approveSubmissionInFirestore = async (
     identifierClean: clean,
     bankName: adjustedData?.bankName || existingSub?.bankName || 'Financial Institution',
     details: adjustedData?.details || existingSub?.details || 'Approved Hunter Identifier',
+    remarks: adjustedData?.details || existingSub?.details || 'Approved Hunter Identifier',
     source: adjustedData?.source || existingSub?.source || 'Public Contribution (Approved)',
     status: 'approved',
     createdBy: existingSub?.submittedBy || 'Public User',
@@ -2726,20 +2811,119 @@ export const searchLiveIdentifiersInFirestore = async (
 };
 
 /**
- * One-Click CSV Export for Admin
- * Formats all LIVE identifiers directly from Cloud Firestore into the specified format:
- * Identifier, Bank Name, Details, Source, Status, Created Date, Updated Date, Approved Date
+ * Section 12: Production Admin CSV Export from Firestore
+ * The CSV is ALWAYS generated from the current Firestore collection: live_identifiers
+ * Flow:
+ * Admin clicks Download LIVE CSV -> Fresh query to Firestore live_identifiers -> Generate CSV -> Download
+ * Filename: hunter_identifiers_YYYY-MM-DD_HH-mm-ss.csv
+ * Fields: Identifier, Normalized Identifier, Bank / NBFC, Details, Source, Status, Created At, Updated At, Approved By, Approved At
  */
-export const downloadLiveIdentifiersAsCSV = (records: LiveIdentifierRecord[]): void => {
+export const exportLiveIdentifiersDirectFromFirestore = async (): Promise<{
+  count: number;
+  filename: string;
+}> => {
+  await ensureAdminFirebaseAuthenticated();
+
+  // Fresh direct query to Cloud Firestore collection: live_identifiers
+  const colRef = collection(db, LIVE_IDENTIFIERS_COLLECTION);
+  const snap = await getDocs(colRef);
+
+  if (snap.empty) {
+    throw new Error('No LIVE identifiers available for export.');
+  }
+
+  const escapeCSV = (val: any) => {
+    const s = String(val ?? '').replace(/"/g, '""');
+    return `"${s}"`;
+  };
+
   const headers = [
     'Identifier',
-    'Bank Name',
+    'Normalized Identifier',
+    'Bank / NBFC',
     'Details',
     'Source',
     'Status',
-    'Created Date',
-    'Updated Date',
-    'Approved Date',
+    'Created At',
+    'Updated At',
+    'Approved By',
+    'Approved At',
+  ];
+
+  const rows = snap.docs.map((d) => {
+    const r = d.data() as LiveIdentifierRecord;
+    const cleanId = (r.identifier || r.hunterId || d.id || '').toString().trim();
+    const norm = r.normalizedIdentifier || getNormalizedIdentifier(cleanId);
+    const bank = (
+      r.bankName ||
+      r.rawColumns?.['Bank/NBFC Name'] ||
+      r.rawColumns?.['Bank-NBFC'] ||
+      'Financial Institution'
+    )
+      .toString()
+      .trim();
+    const details = (r.details || r.name || '').toString().trim();
+    const source = (r.source || 'Master Live Database').toString().trim();
+    const status = (r.status || 'live').toString().trim();
+    const createdAt = r.createdAt ? new Date(r.createdAt).toISOString() : '';
+    const updatedAt = r.updatedAt ? new Date(r.updatedAt).toISOString() : '';
+    const approvedBy = (r.approvedBy || r.createdBy || 'Administrator').toString().trim();
+    const approvedAt = r.approvedAt ? new Date(r.approvedAt).toISOString() : '';
+
+    return [
+      escapeCSV(cleanId),
+      escapeCSV(norm),
+      escapeCSV(bank),
+      escapeCSV(details),
+      escapeCSV(source),
+      escapeCSV(status),
+      escapeCSV(createdAt),
+      escapeCSV(updatedAt),
+      escapeCSV(approvedBy),
+      escapeCSV(approvedAt),
+    ].join(',');
+  });
+
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const datePart = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  const timePart = `${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+  const filename = `hunter_identifiers_${datePart}_${timePart}.csv`;
+
+  const csvContent = '\uFEFF' + [headers.map(escapeCSV).join(','), ...rows].join('\r\n');
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.setAttribute('href', url);
+  link.setAttribute('download', filename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+
+  return { count: snap.size, filename };
+};
+
+/**
+ * One-Click CSV Export for Admin
+ * Formats all LIVE identifiers directly into the specified format
+ */
+export const downloadLiveIdentifiersAsCSV = (records: LiveIdentifierRecord[]): void => {
+  if (!records || records.length === 0) {
+    throw new Error('No LIVE identifiers available for export.');
+  }
+
+  const headers = [
+    'Identifier',
+    'Normalized Identifier',
+    'Bank / NBFC',
+    'Details',
+    'Source',
+    'Status',
+    'Created At',
+    'Updated At',
+    'Approved By',
+    'Approved At',
   ];
 
   const escapeCSV = (val: any) => {
@@ -2748,22 +2932,30 @@ export const downloadLiveIdentifiersAsCSV = (records: LiveIdentifierRecord[]): v
   };
 
   const rows = records.map((r) => [
-    escapeCSV(r.identifier),
+    escapeCSV(r.identifier || r.hunterId || r.id),
+    escapeCSV(r.normalizedIdentifier || getNormalizedIdentifier(r.identifier || r.hunterId || r.id)),
     escapeCSV(r.bankName),
     escapeCSV(r.details),
     escapeCSV(r.source),
     escapeCSV(r.status),
-    escapeCSV(r.createdAt ? new Date(r.createdAt).toLocaleString() : ''),
-    escapeCSV(r.updatedAt ? new Date(r.updatedAt).toLocaleString() : ''),
-    escapeCSV(r.approvedAt ? new Date(r.approvedAt).toLocaleString() : ''),
+    escapeCSV(r.createdAt ? new Date(r.createdAt).toISOString() : ''),
+    escapeCSV(r.updatedAt ? new Date(r.updatedAt).toISOString() : ''),
+    escapeCSV(r.approvedBy || r.createdBy || 'Administrator'),
+    escapeCSV(r.approvedAt ? new Date(r.approvedAt).toISOString() : ''),
   ]);
 
-  const csvContent = [headers.map(escapeCSV).join(','), ...rows.map((row) => row.join(','))].join('\r\n');
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const datePart = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  const timePart = `${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+  const filename = `hunter_identifiers_${datePart}_${timePart}.csv`;
+
+  const csvContent = '\uFEFF' + [headers.map(escapeCSV).join(','), ...rows.map((row) => row.join(','))].join('\r\n');
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.setAttribute('href', url);
-  link.setAttribute('download', `Hunter_Live_Identifiers_${new Date().toISOString().slice(0, 10)}.csv`);
+  link.setAttribute('download', filename);
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);

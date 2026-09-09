@@ -18,6 +18,7 @@ import {
   PlusCircle,
   Clock,
   ShieldAlert,
+  User,
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -32,6 +33,7 @@ interface HeaderProps {
   liveSyncStatus?: LiveSyncStatus;
   onOpenUserSubmit?: () => void;
   pendingApprovalsCount?: number;
+  onOpenProfile?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -44,6 +46,7 @@ export const Header: React.FC<HeaderProps> = ({
   liveSyncStatus = 'connected',
   onOpenUserSubmit,
   pendingApprovalsCount = 0,
+  onOpenProfile,
 }) => {
   return (
     <header
@@ -165,22 +168,44 @@ export const Header: React.FC<HeaderProps> = ({
                   )}
                 </button>
 
-                <div
-                  className="hidden sm:flex items-center gap-2 px-2.5 py-1 rounded-xl bg-slate-50 border border-slate-200 text-left"
-                  title={`Logged in as Admin: ${adminSession.name} (${adminSession.username})`}
-                >
-                  <div className="w-6 h-6 rounded-full bg-gradient-to-tr from-indigo-600 to-blue-500 flex items-center justify-center text-white text-[10px] font-bold shadow-xs">
-                    M
+                {onOpenProfile ? (
+                  <button
+                    type="button"
+                    onClick={onOpenProfile}
+                    id="header-admin-profile-btn"
+                    className="hidden sm:flex items-center gap-2 px-2.5 py-1 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-left transition-colors cursor-pointer"
+                    title={`Logged in as Admin: ${adminSession.name} (${adminSession.username}) - Click to view profile`}
+                  >
+                    <div className="w-6 h-6 rounded-full bg-gradient-to-tr from-indigo-600 to-blue-500 flex items-center justify-center text-white text-[10px] font-bold shadow-xs">
+                      M
+                    </div>
+                    <div>
+                      <span className="text-xs font-bold text-slate-900 block leading-tight">
+                        {adminSession.name}
+                      </span>
+                      <span className="text-[9px] font-semibold text-emerald-600 uppercase tracking-wider block">
+                        Admin
+                      </span>
+                    </div>
+                  </button>
+                ) : (
+                  <div
+                    className="hidden sm:flex items-center gap-2 px-2.5 py-1 rounded-xl bg-slate-50 border border-slate-200 text-left"
+                    title={`Logged in as Admin: ${adminSession.name} (${adminSession.username})`}
+                  >
+                    <div className="w-6 h-6 rounded-full bg-gradient-to-tr from-indigo-600 to-blue-500 flex items-center justify-center text-white text-[10px] font-bold shadow-xs">
+                      M
+                    </div>
+                    <div>
+                      <span className="text-xs font-bold text-slate-900 block leading-tight">
+                        {adminSession.name}
+                      </span>
+                      <span className="text-[9px] font-semibold text-emerald-600 uppercase tracking-wider block">
+                        Admin
+                      </span>
+                    </div>
                   </div>
-                  <div>
-                    <span className="text-xs font-bold text-slate-900 block leading-tight">
-                      {adminSession.name}
-                    </span>
-                    <span className="text-[9px] font-semibold text-emerald-600 uppercase tracking-wider block">
-                      Admin
-                    </span>
-                  </div>
-                </div>
+                )}
 
                 <button
                   id="header-logout-btn"
@@ -193,31 +218,62 @@ export const Header: React.FC<HeaderProps> = ({
               </div>
             ) : googleUser ? (
               <div className="flex items-center gap-2">
-                <div
-                  className="flex items-center gap-2 px-2.5 py-1 rounded-xl bg-slate-50 border border-slate-200 text-left"
-                  title={`Signed in as: ${googleUser.displayName || googleUser.email}`}
-                >
-                  {googleUser.photoURL ? (
-                    <img
-                      src={googleUser.photoURL}
-                      alt={googleUser.displayName || 'User'}
-                      className="w-6 h-6 rounded-full object-cover border border-slate-200"
-                      referrerPolicy="no-referrer"
-                    />
-                  ) : (
-                    <div className="w-6 h-6 rounded-full bg-indigo-600 flex items-center justify-center text-white text-[10px] font-bold">
-                      {(googleUser.displayName || googleUser.email || 'U')[0].toUpperCase()}
+                {onOpenProfile ? (
+                  <button
+                    type="button"
+                    onClick={onOpenProfile}
+                    id="header-user-profile-btn"
+                    className="flex items-center gap-2 px-2.5 py-1 rounded-xl bg-slate-50 hover:bg-indigo-50/70 border border-slate-200 hover:border-indigo-200 text-left transition-colors cursor-pointer"
+                    title={`Signed in as: ${googleUser.displayName || googleUser.email} - Click to view profile`}
+                  >
+                    {googleUser.photoURL ? (
+                      <img
+                        src={googleUser.photoURL}
+                        alt={googleUser.displayName || 'User'}
+                        className="w-6 h-6 rounded-full object-cover border border-slate-200"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      <div className="w-6 h-6 rounded-full bg-indigo-600 flex items-center justify-center text-white text-[10px] font-bold">
+                        {(googleUser.displayName || googleUser.email || 'U')[0].toUpperCase()}
+                      </div>
+                    )}
+                    <div className="hidden sm:block">
+                      <span className="text-xs font-bold text-slate-900 block leading-tight max-w-[120px] truncate">
+                        {googleUser.displayName || googleUser.email?.split('@')[0]}
+                      </span>
+                      <span className="text-[9px] font-semibold text-indigo-600 uppercase tracking-wider block">
+                        My Profile
+                      </span>
                     </div>
-                  )}
-                  <div className="hidden sm:block">
-                    <span className="text-xs font-bold text-slate-900 block leading-tight max-w-[120px] truncate">
-                      {googleUser.displayName || googleUser.email?.split('@')[0]}
-                    </span>
-                    <span className="text-[9px] font-semibold text-slate-500 uppercase tracking-wider block">
-                      Google Auth
-                    </span>
+                  </button>
+                ) : (
+                  <div
+                    className="flex items-center gap-2 px-2.5 py-1 rounded-xl bg-slate-50 border border-slate-200 text-left"
+                    title={`Signed in as: ${googleUser.displayName || googleUser.email}`}
+                  >
+                    {googleUser.photoURL ? (
+                      <img
+                        src={googleUser.photoURL}
+                        alt={googleUser.displayName || 'User'}
+                        className="w-6 h-6 rounded-full object-cover border border-slate-200"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      <div className="w-6 h-6 rounded-full bg-indigo-600 flex items-center justify-center text-white text-[10px] font-bold">
+                        {(googleUser.displayName || googleUser.email || 'U')[0].toUpperCase()}
+                      </div>
+                    )}
+                    <div className="hidden sm:block">
+                      <span className="text-xs font-bold text-slate-900 block leading-tight max-w-[120px] truncate">
+                        {googleUser.displayName || googleUser.email?.split('@')[0]}
+                      </span>
+                      <span className="text-[9px] font-semibold text-slate-500 uppercase tracking-wider block">
+                        Google Auth
+                      </span>
+                    </div>
                   </div>
-                </div>
+                )}
 
                 <button
                   id="header-user-logout-btn"
@@ -308,6 +364,16 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <Lock className="w-3.5 h-3.5" />
               <span>Admin</span>
+            </button>
+          )}
+          {(googleUser || adminSession?.isAuthenticated) && onOpenProfile && (
+            <button
+              id="mobile-nav-profile"
+              onClick={onOpenProfile}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap text-indigo-700 bg-indigo-50/80 cursor-pointer"
+            >
+              <User className="w-3.5 h-3.5" />
+              <span>Profile</span>
             </button>
           )}
         </div>

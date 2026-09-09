@@ -116,6 +116,7 @@ export interface ManualHunterRecord {
   bankName: string;
   name: string;
   details?: string;
+  source?: string;
   status: string;
   remarks: string;
   notes?: string;

@@ -18,6 +18,7 @@ import {
   Landmark,
   Check,
   Sparkles,
+  FileText,
 } from 'lucide-react';
 import { submitUserHunterRecordToFirestore } from '../lib/firebase';
 import { RecordItem, ManualHunterRecord } from '../types';
@@ -30,6 +31,8 @@ interface UserSubmitIdentifierModalProps {
   uniqueBanks: string[];
   initialRecord?: RecordItem | null;
   mode?: 'new' | 'update';
+  currentUser?: any;
+  liveIdentifiers?: any[];
   onSuccess?: (submissionId: string, hunterId: string, newRecord?: ManualHunterRecord) => void;
   onSubmitSuccess?: (submissionId: string, hunterId: string, newRecord?: ManualHunterRecord) => void;
 }
@@ -40,6 +43,8 @@ export const UserSubmitIdentifierModal: React.FC<UserSubmitIdentifierModalProps>
   uniqueBanks,
   initialRecord,
   mode = 'new',
+  currentUser,
+  liveIdentifiers = [],
   onSuccess,
   onSubmitSuccess,
 }) => {
@@ -47,16 +52,32 @@ export const UserSubmitIdentifierModal: React.FC<UserSubmitIdentifierModalProps>
     initialRecord ? 'update' : mode
   );
 
-  // Form Fields - Only Hunter ID, Institution Classification (Bank/NBFC), and Bank/NBFC Name
+  // Form Fields - Hunter ID, Institution Classification (Bank/NBFC), Bank/NBFC Name, Details, Source
   const [hunterId, setHunterId] = useState('');
   const [orgType, setOrgType] = useState<UserOrgTypeOption>('Bank');
   const [bankName, setBankName] = useState('');
   const [customBank, setCustomBank] = useState('');
+  const [details, setDetails] = useState('');
+  const [source, setSource] = useState('RCU Verification / Field Investigation');
 
   // UI States
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submittedRef, setSubmittedRef] = useState<string | null>(null);
+
+  // Check duplicate against LIVE identifiers
+  const duplicateMatch = React.useMemo(() => {
+    if (submissionType !== 'new' || !hunterId.trim() || liveIdentifiers.length === 0) return null;
+    const clean = hunterId.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (clean.length < 3) return null;
+    return liveIdentifiers.find((l: any) => {
+      const liveClean = (l.normalizedIdentifier || l.identifier || l.hunterId || '')
+        .toString()
+        .toUpperCase()
+        .replace(/[^A-Z0-9]/g, '');
+      return liveClean === clean;
+    });
+  }, [submissionType, hunterId, liveIdentifiers]);
 
   // Reset or pre-fill on open
   useEffect(() => {
@@ -83,12 +104,16 @@ export const UserSubmitIdentifierModal: React.FC<UserSubmitIdentifierModalProps>
           setBankName('');
           setCustomBank('');
         }
+        setDetails(initialRecord.details || initialRecord.name || '');
+        setSource(initialRecord.source || 'RCU Verification / Field Investigation');
       } else {
         setSubmissionType('new');
         setHunterId('');
         setOrgType('Bank');
         setBankName('');
         setCustomBank('');
+        setDetails('');
+        setSource('RCU Verification / Field Investigation');
       }
     }
   }, [isOpen, initialRecord, uniqueBanks]);
@@ -122,15 +147,22 @@ export const UserSubmitIdentifierModal: React.FC<UserSubmitIdentifierModalProps>
     try {
       const isUpdate = submissionType === 'update';
       const recordStatus = initialRecord?.status || 'Active Reference';
+      const submitterName =
+        currentUser?.displayName || currentUser?.name || currentUser?.email?.split('@')[0] || 'User';
+      const submitterEmail = currentUser?.email || '';
+
       const submissionId = await submitUserHunterRecordToFirestore({
         hunterId: cleanHunterId,
         bankName: effectiveBank,
         orgType,
         name: cleanHunterId,
+        details: details.trim() || 'User contributed identifier',
+        source: source.trim() || 'RCU Verification',
         status: recordStatus,
         remarks: isUpdate ? 'Proposed update to identifier details' : 'Contributed by user for reference.',
         submittedBy: {
-          name: 'Portal User',
+          name: submitterName,
+          email: submitterEmail,
         },
         isUpdateRequest: isUpdate,
         targetRecordId: initialRecord?.id || undefined,
@@ -149,6 +181,8 @@ export const UserSubmitIdentifierModal: React.FC<UserSubmitIdentifierModalProps>
           'Type': orgType,
           'Bank/NBFC Name': effectiveBank,
           'Organisation Name': effectiveBank,
+          'Details': details.trim() || cleanHunterId,
+          'Source': source.trim(),
           'Status': recordStatus,
           ...(initialRecord?.rawColumns || {}),
         },
@@ -161,14 +195,17 @@ export const UserSubmitIdentifierModal: React.FC<UserSubmitIdentifierModalProps>
         bankName: effectiveBank,
         orgType,
         name: cleanHunterId,
+        details: details.trim() || 'User contributed identifier',
+        source: source.trim() || 'RCU Verification',
         status: recordStatus,
         remarks: isUpdate ? 'Proposed update to identifier details' : 'Contributed by user for reference.',
-        createdBy: 'Portal User',
+        createdBy: submitterName,
         createdAt: now,
         updatedAt: now,
         approvalStatus: 'pending',
         submittedBy: {
-          name: 'Portal User',
+          name: submitterName,
+          email: submitterEmail,
         },
         submittedAt: now,
         isUpdateRequest: isUpdate,
@@ -188,6 +225,8 @@ export const UserSubmitIdentifierModal: React.FC<UserSubmitIdentifierModalProps>
           'Type': orgType,
           'Bank/NBFC Name': effectiveBank,
           'Organisation Name': effectiveBank,
+          'Details': details.trim() || cleanHunterId,
+          'Source': source.trim(),
           'Status': recordStatus,
           ...(initialRecord?.rawColumns || {}),
         },
@@ -340,6 +379,40 @@ export const UserSubmitIdentifierModal: React.FC<UserSubmitIdentifierModalProps>
               </div>
             )}
 
+            {/* Duplicate Notice Banner */}
+            {duplicateMatch && (
+              <div className="p-3 rounded-xl bg-amber-50 border border-amber-300 text-xs text-amber-900 flex items-start justify-between gap-3">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                  <div>
+                    <div className="font-bold">Record Already Exists in LIVE Database</div>
+                    <div className="text-[11px] text-amber-800">
+                      Identifier &quot;{duplicateMatch.identifier || duplicateMatch.hunterId}&quot; is currently registered under {duplicateMatch.bankName}. You can propose an update instead.
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSubmissionType('update');
+                    setHunterId(duplicateMatch.identifier || duplicateMatch.hunterId || duplicateMatch.id);
+                    if (duplicateMatch.bankName) {
+                      setBankName(duplicateMatch.bankName);
+                    }
+                    if (duplicateMatch.details) {
+                      setDetails(duplicateMatch.details);
+                    }
+                    if (duplicateMatch.source) {
+                      setSource(duplicateMatch.source);
+                    }
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] shrink-0 cursor-pointer shadow-2xs"
+                >
+                  Propose Update
+                </button>
+              </div>
+            )}
+
             {/* Category 1: Hunter Identifier */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
@@ -472,6 +545,38 @@ export const UserSubmitIdentifierModal: React.FC<UserSubmitIdentifierModalProps>
                   className="w-full mt-1.5 px-3.5 py-2.5 text-xs font-semibold text-slate-900 bg-white border border-indigo-400 rounded-xl focus:ring-2 focus:ring-indigo-100 outline-hidden"
                 />
               )}
+            </div>
+
+            {/* Category 4: Identification Details */}
+            <div className="space-y-1.5 pt-2 border-t border-slate-100">
+              <div className="flex items-center gap-1.5 text-slate-900 font-bold uppercase tracking-wider text-[11px]">
+                <FileText className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Identification Details</span>
+              </div>
+              <input
+                id="user-details-input"
+                type="text"
+                value={details}
+                onChange={(e) => setDetails(e.target.value)}
+                placeholder="e.g. Personal Loan Application, Discrepant KYC Record, Fraud Alert"
+                className="w-full px-3.5 py-2.5 text-xs font-medium text-slate-900 bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:border-indigo-600 outline-hidden"
+              />
+            </div>
+
+            {/* Category 5: Verification / Source Details */}
+            <div className="space-y-1.5 pt-2 border-t border-slate-100">
+              <div className="flex items-center gap-1.5 text-slate-900 font-bold uppercase tracking-wider text-[11px]">
+                <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Verification / Source Details</span>
+              </div>
+              <input
+                id="user-source-input"
+                type="text"
+                value={source}
+                onChange={(e) => setSource(e.target.value)}
+                placeholder="e.g. Credit Bureau Report, Field RCU Verification, Internal Audit"
+                className="w-full px-3.5 py-2.5 text-xs font-medium text-slate-900 bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:border-indigo-600 outline-hidden"
+              />
             </div>
 
             {/* Modal Actions */}

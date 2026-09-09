@@ -53,7 +53,8 @@ import { parseCSVText, exportToCSV } from '../utils/csvParser';
 import { AddManualRecordModal, ManualRecordInput } from './AddManualRecordModal';
 import { AdminApprovalsManager } from './AdminApprovalsManager';
 import { maskIdentifierNumber, maskGenericNumber } from '../utils/masking';
-import { VisitorStats } from '../types';
+import { VisitorStats, LiveIdentifierRecord, SubmissionRecord, LiveSyncStatus } from '../types';
+import { AdminFirebaseDiagnostics } from './AdminFirebaseDiagnostics';
 
 interface AdminDashboardProps {
   adminSession: AdminSession;
@@ -88,6 +89,10 @@ interface AdminDashboardProps {
   visitorStats?: VisitorStats;
   uploadProgress?: number | null;
   isUploading?: boolean;
+  liveSyncStatus?: LiveSyncStatus;
+  liveIdentifiers?: LiveIdentifierRecord[];
+  submissions?: SubmissionRecord[];
+  lastSnapshotTimestamp?: Date | null;
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
@@ -115,6 +120,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   visitorStats,
   uploadProgress = null,
   isUploading = false,
+  liveSyncStatus = 'connected',
+  liveIdentifiers = [],
+  submissions = [],
+  lastSnapshotTimestamp = null,
 }) => {
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -732,6 +741,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 )}
               </div>
 
+              {/* Master Cloud Firestore Synchronization & Connection Diagnostics */}
+              <AdminFirebaseDiagnostics
+                liveSyncStatus={liveSyncStatus}
+                liveIdentifiers={liveIdentifiers}
+                submissions={submissions}
+                lastSnapshotTimestamp={lastSnapshotTimestamp}
+              />
+
               {/* Quick Actions & Dataset Health */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {/* Quick Management Shortcuts */}
@@ -1161,7 +1178,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <PlusCircle className="w-3.5 h-3.5" />
                       <span>+ Add Identifier Manually</span>
                     </button>
-                    {hasData && (
+                    {(hasData || records.length > 0 || (liveIdentifiers && liveIdentifiers.length > 0)) && (
                       <button
                         id="admin-download-dataset-btn"
                         type="button"
@@ -1170,7 +1187,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         title="Download active Hunter Identifier dataset as CSV (Admin Exclusive)"
                       >
                         <Download className="w-3.5 h-3.5" />
-                        <span>Download Dataset (CSV)</span>
+                        <span>Download LIVE Dataset (CSV)</span>
                       </button>
                     )}
                     {hasData && (

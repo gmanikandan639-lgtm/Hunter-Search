@@ -7,127 +7,109 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // Helper function: Check if user is the document owner
-    function isOwner(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
-    }
-
-    // Admin authorization: checks users/{uid}.role field or authorized admin emails
+    // Admin authorization: strictly based on users/{uid}.role == "admin"
+    // A Google-authenticated user is NOT automatically an Admin.
+    // Only a user whose Firestore users document contains role: "admin" is considered Admin.
     function isAdmin() {
-      return isAuthenticated() && (
-        (request.auth.token.email != null && (
-          request.auth.token.email == 'gmanikandan639@gmail.com' ||
-          request.auth.token.email == 'admin_e2e@fraudriskhub.com' ||
-          request.auth.token.email == 'hunter_admin@fraudriskhub.com' ||
-          request.auth.token.email.matches('.*admin.*')
-        )) ||
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
-      );
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
     }
 
-    // 1. live_identifiers Collection (Master Public Searchable Database)
-    // Public users (no login required) can read approved/live identifiers.
-    // Normal/unauthenticated users CANNOT create, update, or delete live identifiers.
-    // Admin users have full CREATE, UPDATE, DELETE permissions.
+    // 1. live_identifiers Collection (Master Searchable Database)
+    // ALL USERS must login before accessing Hunter Verification.
+    // Public unauthenticated access: DENIED.
+    // Authenticated normal user: Can READ live_identifiers. Cannot CREATE/UPDATE/DELETE.
+    // Admin: Can manage live_identifiers (READ, CREATE, UPDATE, DELETE).
     match /live_identifiers/{recordId} {
-      allow read: if true;
+      allow read: if isAuthenticated();
       allow create, update, delete: if isAdmin();
     }
 
-    // 2. submissions Collection (Public Contributions & Proposals)
-    // Public users (unauthenticated, request.auth may be null) can CREATE pending submissions only.
-    // Public users CANNOT read other users' submissions, cannot modify after submission, cannot approve.
-    // Admin users can read, review, approve, update, and reject submissions.
+    // 2. submissions Collection (User Contributions & Proposed Updates)
+    // Public unauthenticated access: DENIED.
+    // Authenticated normal user:
+    // - Can READ own submissions.
+    // - Can CREATE pending submissions with their own UID as submittedBy (no admin fields).
+    // - Cannot approve submissions, directly write LIVE records, or update/delete submissions.
+    // Admin: Can read all, approve/reject (update), create, delete.
     match /submissions/{submissionId} {
-      // Only Admin can read submissions
-      allow read: if isAdmin();
-
-      // Public users (or admins) can create submissions:
-      // Validates: status must be 'pending', identifier non-empty, normalizedIdentifier present,
-      // and admin approval fields CANNOT be set by public users.
-      allow create: if (
+      allow read: if isAdmin() || (isAuthenticated() && resource.data.submittedBy == request.auth.uid);
+      allow create: if isAdmin() || (
+        isAuthenticated() &&
         request.resource.data.status == 'pending' &&
+        request.resource.data.submittedBy == request.auth.uid &&
         request.resource.data.identifier is string &&
         request.resource.data.identifier.size() > 0 &&
         request.resource.data.normalizedIdentifier is string &&
         request.resource.data.normalizedIdentifier.size() > 0 &&
-        (!('approvedBy' in request.resource.data) || request.resource.data.approvedBy == null) &&
-        (!('approvedAt' in request.resource.data) || request.resource.data.approvedAt == null) &&
-        (!('reviewedBy' in request.resource.data) || request.resource.data.reviewedBy == null) &&
-        (!('reviewedAt' in request.resource.data) || request.resource.data.reviewedAt == null) &&
-        (!('rejectionReason' in request.resource.data) || request.resource.data.rejectionReason == null)
-      ) || isAdmin();
-
-      // Only Admin can update or delete submissions
+        (!('approvedBy' in request.resource.data)) &&
+        (!('approvedAt' in request.resource.data)) &&
+        (!('reviewedBy' in request.resource.data)) &&
+        (!('reviewedAt' in request.resource.data)) &&
+        (!('rejectionReason' in request.resource.data))
+      );
       allow update, delete: if isAdmin();
     }
 
-    // 3. users Collection (Admin Profiles & RBAC)
-    // Normal public users do not have access.
-    // Authenticated users can view their own profile; Admins have full access.
+    // 3. users Collection (Role-Based Access Control)
+    // Public unauthenticated access: DENIED.
+    // Authenticated user can read their own profile; Admin can read all.
+    // Authenticated user can create their initial profile as 'user' (never 'admin'); Admin can create any.
+    // Authenticated user can update their profile fields, but CANNOT modify 'role'; Admin can update any.
+    // Only Admin can delete users.
     match /users/{userId} {
-      allow read: if isOwner(userId) || isAdmin();
-      allow create: if isOwner(userId) && (
-        !('role' in request.resource.data) ||
-        request.resource.data.role == 'user' ||
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow create: if isAuthenticated() && (
+        (request.auth.uid == userId && (!('role' in request.resource.data) || request.resource.data.role == 'user')) ||
         isAdmin()
       );
-      allow update: if (
-        isOwner(userId) &&
-        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['role']))
-      ) || isAdmin();
+      allow update: if isAuthenticated() && (
+        (request.auth.uid == userId && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['role']))) ||
+        isAdmin()
+      );
       allow delete: if isAdmin();
     }
 
-    // 4. Existing Data Preservation: hunter_records Collection
-    // Public can read to search existing datasets; Admin manages.
-    match /hunter_records/{recordId} {
-      allow get: if resource == null || resource.data.status in ['approved', 'live', null, 'Active Reference'] || isAdmin();
-      allow list: if true;
-      allow create, update, delete: if isAdmin();
-    }
-
-    // 5. Existing Data Preservation: manual_identifiers Collection
-    // Public can read approved manual records; Admin manages.
-    match /manual_identifiers/{recordId} {
-      allow get: if resource == null || resource.data.status in ['approved', 'live', null, 'Active Reference'] || isAdmin();
-      allow list: if true;
-      allow create, update, delete: if isAdmin();
-    }
-
-    // 6. csv_metadata Collection
-    // Tracks CSV exports and metadata. Public can read active metadata; Admin can write.
+    // 4. csv_metadata Collection (Dataset Metadata)
     match /csv_metadata/{metaId} {
-      allow read: if true;
-      allow create, update, delete: if isAdmin();
+      allow read, write: if isAdmin();
     }
 
-    // 7. Connection Diagnostics Test Collection
+    // 5. Auxiliary & Diagnostic Collections
     match /connection_test/{document} {
-      allow read, write: if true;
-    }
-
-    // 8. Search History & Visitor Stats
-    match /search_history/{searchId} {
-      allow read: if isAdmin();
-      allow create: if true;
-      allow update, delete: if isAdmin();
+      allow read, write: if isAdmin();
     }
 
     match /visitor_stats/{statId} {
-      allow read, write: if true;
+      allow read, write: if isAuthenticated();
     }
 
-    // 9. Admins mapping & csv_datasets
+    match /search_history/{searchId} {
+      allow read, write: if isAdmin();
+    }
+
     match /admins/{adminId} {
-      allow read: if isOwner(adminId) || isAdmin();
-      allow write: if isAdmin();
+      allow read, write: if isAdmin();
+    }
+
+    match /hunter_records/{recordId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /manual_identifiers/{recordId} {
+      allow read, write: if isAdmin();
     }
 
     match /csv_datasets/{datasetId} {
-      allow read: if true;
-      allow write: if isAdmin();
+      allow read, write: if isAdmin();
+    }
+
+    // 6. Default Catch-All: Deny access to all unknown collections
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }
+
+

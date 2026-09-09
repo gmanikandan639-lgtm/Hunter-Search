@@ -29,6 +29,7 @@ import { AdminLogin } from './components/AdminLogin';
 import { AdminDashboard } from './components/AdminDashboard';
 import { AddManualRecordModal, ManualRecordInput } from './components/AddManualRecordModal';
 import { UserSubmitIdentifierModal } from './components/UserSubmitIdentifierModal';
+import { UserProfileModal } from './components/UserProfileModal';
 import { ReplaceConfirmModal } from './components/ReplaceConfirmModal';
 import { ClearConfirmModal } from './components/ClearConfirmModal';
 import { ToastNotification, ToastMessage } from './components/ToastNotification';
@@ -66,6 +67,7 @@ import {
   adminDirectUpdateLiveIdentifier,
   adminDirectDeleteLiveIdentifier,
   downloadLiveIdentifiersAsCSV,
+  exportLiveIdentifiersDirectFromFirestore,
   seedLiveIdentifiersIfEmpty,
   LiveIdentifierRecord,
   SubmissionRecord,
@@ -96,25 +98,30 @@ export default function App() {
     return null;
   });
 
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState<boolean>(false);
+
   // Listen to Google Authentication state exclusively
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
         setGoogleUser(user);
-        const { isAdmin } = await syncUserProfileInFirestore(user);
+        const { isAdmin, role, name } = await syncUserProfileInFirestore(user);
         if (isAdmin || user.email === 'gmanikandan639@gmail.com') {
           setAdminSession({
             isAuthenticated: true,
             username: user.email || 'Admin',
-            name: user.displayName || 'Manikandan',
+            name: name || user.displayName || 'Manikandan',
             role: 'Administrator',
             system: 'Hunter Risk Management',
             loginTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
             token: user.uid,
           });
+        } else {
+          setAdminSession(null);
         }
       } else {
         setGoogleUser(null);
+        setAdminSession(null);
       }
       setIsAuthChecking(false);
     });
@@ -135,6 +142,7 @@ export default function App() {
   // Master Database: Cloud Firestore live_identifiers and submissions
   const [liveIdentifiers, setLiveIdentifiers] = useState<LiveIdentifierRecord[]>([]);
   const [submissionsList, setSubmissionsList] = useState<SubmissionRecord[]>([]);
+  const [lastSnapshotTimestamp, setLastSnapshotTimestamp] = useState<Date | null>(new Date());
 
   // User Frontend Submission Modal State
   const [isUserSubmitModalOpen, setIsUserSubmitModalOpen] = useState<boolean>(false);
@@ -258,8 +266,11 @@ export default function App() {
     // 3. Real-Time Master Listener: Cloud Firestore live_identifiers
     // Fires instantly for both unauthenticated search users and authenticated admins
     const unsubscribeLive = subscribeToLiveIdentifiers(
-      (liveDocs) => {
+      (liveDocs, meta) => {
         setLiveIdentifiers(liveDocs);
+        if (meta?.lastSnapshotTime) {
+          setLastSnapshotTimestamp(meta.lastSnapshotTime);
+        }
       },
       (status) => {
         setLiveSyncStatus(status);
@@ -267,8 +278,11 @@ export default function App() {
     );
 
     // 4. Real-Time Submissions Listener: Public contributions queue for Admin approval
-    const unsubscribeSubmissions = subscribeToSubmissions((subs) => {
+    const unsubscribeSubmissions = subscribeToSubmissions((subs, meta) => {
       setSubmissionsList(subs);
+      if (meta?.lastSnapshotTime) {
+        setLastSnapshotTimestamp(meta.lastSnapshotTime);
+      }
     });
 
     // 5. Real-Time Listener: Manual Hunter Identifiers (Sync & Fallback)
@@ -1103,12 +1117,13 @@ export default function App() {
       (s) => s.id === submissionId || s.submissionId === submissionId
     );
 
-    const effectiveHunterId =
+    const effectiveHunterId = (
       adjustedData?.hunterId ||
       targetManual?.hunterId ||
       (targetManual as any)?.identifier ||
       targetSub?.identifier ||
-      submissionId;
+      submissionId
+    ).trim();
 
     const effectiveBank =
       adjustedData?.bankName ||
@@ -1126,50 +1141,35 @@ export default function App() {
       targetSub?.details ||
       effectiveHunterId;
 
-    // Optimistic UI update
-    setManualRecords((prev) =>
-      prev.map((r) =>
-        r.id === submissionId
-          ? {
-              ...r,
-              ...(adjustedData || {}),
-              hunterId: effectiveHunterId,
-              bankName: effectiveBank,
-              approvalStatus: 'approved',
-              reviewedBy: adminName,
-              reviewedAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-            }
-          : r
-      )
-    );
-    setSubmissionsList((prev) =>
-      prev.map((s) => (s.id === submissionId ? { ...s, status: 'approved' } : s))
-    );
-
     try {
-      // 1. Promote to master live_identifiers in Cloud Firestore
+      // 1. Mandatory write to master live_identifiers and submissions in Cloud Firestore
       await approveSubmissionInFirestore(submissionId, adminName, {
         identifier: effectiveHunterId,
         bankName: effectiveBank,
         details: effectiveDetails,
       });
 
-      // 2. Legacy collection sync
+      // 2. Legacy collection sync (best effort)
       await approveUserHunterSubmissionInFirestore(submissionId, adminName, {
         ...adjustedData,
         hunterId: effectiveHunterId,
         bankName: effectiveBank,
-      });
-    } catch (err) {
-      console.warn('Firestore approval sync note:', err);
-    }
+      }).catch((e) => console.warn('Legacy manual_identifiers sync notice:', e));
 
-    triggerToast({
-      type: 'success',
-      title: '✓ Identifier Approved & Live',
-      message: `Record "${effectiveHunterId}" is now live and searchable across all users.`,
-    });
+      // 3. User feedback
+      triggerToast({
+        type: 'success',
+        title: '✓ Identifier Approved & Live',
+        message: `Record "${effectiveHunterId}" is now live in Cloud Firestore across all connected devices and browsers.`,
+      });
+    } catch (err: any) {
+      console.error('CRITICAL: Cloud Firestore approval write to live_identifiers failed:', err);
+      triggerToast({
+        type: 'error',
+        title: 'Approval Failed in Cloud Firestore',
+        message: err?.message || 'Failed to write approved record to live_identifiers collection.',
+      });
+    }
   };
 
   // Step 8.4: Handle Admin Rejecting a User Submission
@@ -1286,33 +1286,49 @@ export default function App() {
     return list;
   }, [manualRecords, submissionsList]);
 
-  // Export entire dataset to CSV (Admin Portal only - Requirement 13 & 14)
-  const handleExportDataset = () => {
-    if (combinedRecords.length === 0) return;
+  // Export entire dataset to CSV directly from Firestore collection live_identifiers (Admin Exclusive)
+  const handleExportDataset = async () => {
+    if (!adminSession?.isAuthenticated) {
+      triggerToast({
+        type: 'error',
+        title: 'Admin Access Required',
+        message: 'Only authenticated Administrator accounts can export the LIVE database.',
+      });
+      return;
+    }
 
-    // Convert all active combined live records to live identifiers format for complete export
-    const exportItems: LiveIdentifierRecord[] = combinedRecords.map((r) => {
-      const matchingLive = liveIdentifiers.find((l) => l.id === r.id || l.identifier === r.hunterId);
-      return {
-        id: r.id,
-        identifier: r.hunterId || r.id,
-        bankName: r.bankName,
-        details: r.details || r.name || 'Hunter Identifier Reference',
-        source: matchingLive?.source || r.notes || 'Master Live Database',
-        status: matchingLive?.status || r.status || 'Active Reference',
-        createdAt: matchingLive?.createdAt || r.uploadDate || '',
-        updatedAt: matchingLive?.updatedAt || r.lastUpdated || '',
-        approvedAt: matchingLive?.approvedAt || r.uploadDate || '',
-        approvedBy: matchingLive?.approvedBy || r.uploadedBy || 'Administrator',
-      };
-    });
+    try {
+      triggerToast({
+        type: 'info',
+        title: 'Generating LIVE CSV',
+        message: 'Querying current Cloud Firestore "live_identifiers" collection directly...',
+      });
 
-    downloadLiveIdentifiersAsCSV(exportItems);
-    triggerToast({
-      type: 'success',
-      title: '✓ Live CSV Export Complete',
-      message: `Downloaded ${exportItems.length.toLocaleString()} LIVE identifiers from active master database with one click.`,
-    });
+      const { count, filename } = await exportLiveIdentifiersDirectFromFirestore();
+
+      triggerToast({
+        type: 'success',
+        title: '✓ Live CSV Export Complete',
+        message: `Downloaded ${count.toLocaleString()} LIVE identifiers directly from Firestore (${filename}).`,
+      });
+    } catch (err: any) {
+      console.error('Direct Firestore CSV export error:', err);
+      // Resilient fallback to currently loaded live identifiers if direct query encounters error
+      if (liveIdentifiers.length > 0) {
+        downloadLiveIdentifiersAsCSV(liveIdentifiers);
+        triggerToast({
+          type: 'success',
+          title: '✓ Live CSV Export Complete',
+          message: `Downloaded ${liveIdentifiers.length.toLocaleString()} LIVE identifiers from active snapshot.`,
+        });
+      } else {
+        triggerToast({
+          type: 'error',
+          title: 'Export Failed',
+          message: err?.message || 'Failed to download LIVE identifiers from Cloud Firestore.',
+        });
+      }
+    }
   };
 
   const handleClearHistory = () => {
@@ -1373,6 +1389,7 @@ export default function App() {
         liveSyncStatus={liveSyncStatus}
         pendingApprovalsCount={pendingApprovalsCount}
         onOpenUserSubmit={() => handleOpenUserSubmit()}
+        onOpenProfile={() => setIsProfileModalOpen(true)}
       />
 
 
@@ -1471,6 +1488,10 @@ export default function App() {
               visitorStats={visitorStats}
               uploadProgress={uploadProgress}
               isUploading={isUploading}
+              liveSyncStatus={liveSyncStatus}
+              liveIdentifiers={liveIdentifiers}
+              submissions={submissionsList}
+              lastSnapshotTimestamp={lastSnapshotTimestamp}
             />
           ) : (
             <AdminLogin
@@ -1540,6 +1561,24 @@ export default function App() {
         uniqueBanks={combinedUniqueBanks}
         initialRecord={userSubmitInitialRecord}
         mode={userSubmitMode}
+        currentUser={googleUser}
+        liveIdentifiers={liveIdentifiers}
+      />
+
+      {/* User Account Profile & Role Modal */}
+      <UserProfileModal
+        isOpen={isProfileModalOpen}
+        onClose={() => setIsProfileModalOpen(false)}
+        currentUser={googleUser}
+        userRole={adminSession?.isAuthenticated ? 'admin' : 'user'}
+        userSubmissions={manualRecords}
+        onLogout={handleLogout}
+        onOpenSubmitNew={() => handleOpenUserSubmit()}
+        onProfileUpdated={(newName) => {
+          if (adminSession) {
+            setAdminSession({ ...adminSession, name: newName });
+          }
+        }}
       />
 
       {/* Global Toast Notification */}
