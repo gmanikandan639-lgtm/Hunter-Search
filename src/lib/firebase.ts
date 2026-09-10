@@ -367,8 +367,10 @@ export const syncUserProfileInFirestore = async (
       };
     } else {
       // New account - Default role: "user"
-      // Only demo admin credentials receive admin role automatically on first initialization
-      const defaultRole = user.email === ADMIN_FIREBASE_EMAIL ? 'admin' : 'user';
+      // Designated admin credentials receive admin role automatically on first initialization
+      const isAdminAccount =
+        user.email === ADMIN_FIREBASE_EMAIL || user.email?.toLowerCase() === 'gmanikandan639@gmail.com';
+      const defaultRole = isAdminAccount ? 'admin' : 'user';
       const userName = overrideName || user.displayName || user.email?.split('@')[0] || 'User';
 
       await setDoc(userDocRef, {
@@ -410,9 +412,11 @@ export const syncUserProfileInFirestore = async (
     }
   } catch (err) {
     console.warn('Sync user profile note:', err);
+    const isAdminAccount =
+      user.email === ADMIN_FIREBASE_EMAIL || user.email?.toLowerCase() === 'gmanikandan639@gmail.com';
     return {
-      isAdmin: user.email === ADMIN_FIREBASE_EMAIL,
-      role: user.email === ADMIN_FIREBASE_EMAIL ? 'admin' : 'user',
+      isAdmin: isAdminAccount,
+      role: isAdminAccount ? 'admin' : 'user',
       name: overrideName || user.displayName || user.email?.split('@')[0] || 'User',
       email: user.email || '',
       photoURL: user.photoURL || '',
@@ -1091,7 +1095,7 @@ export const submitUserHunterRecordToFirestore = async (
     );
 
     // If an Admin is authenticated, also sync to manual_identifiers
-    if (auth.currentUser) {
+    if (auth.currentUser && isAuthorizedAdmin(auth.currentUser)) {
       try {
         const cleanData = cleanForFirestore({ ...payload, serverTime: serverTimestamp() });
         await Promise.all([

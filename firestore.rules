@@ -7,13 +7,13 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // Admin authorization: strictly based on users/{uid}.role == "admin"
-    // A Google-authenticated user is NOT automatically an Admin.
-    // Only a user whose Firestore users document contains role: "admin" is considered Admin.
+    // Admin authorization: based on users/{uid}.role == "admin" and designated admin accounts
     function isAdmin() {
-      return isAuthenticated() &&
-        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      return isAuthenticated() && (
+        (request.auth.token.email == 'gmanikandan639@gmail.com' || request.auth.token.email == 'hunter_admin@fraudriskhub.com') ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
+      );
     }
 
     // 1. live_identifiers Collection (Master Searchable Database)
