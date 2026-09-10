@@ -36,6 +36,7 @@ import { ToastNotification, ToastMessage } from './components/ToastNotification'
 import { GoogleAuthGate } from './components/GoogleAuthGate';
 import { FirebaseTestModal } from './components/FirebaseTestModal';
 import { BRAND } from './assets/branding';
+import { ShieldAlert } from 'lucide-react';
 import {
   auth,
   logOut,
@@ -85,43 +86,51 @@ export default function App() {
   const [isAuthChecking, setIsAuthChecking] = useState<boolean>(true);
   const [isFirebaseTestOpen, setIsFirebaseTestOpen] = useState<boolean>(false);
 
-  // Admin Session State with SessionStorage persistence
-  const [adminSession, setAdminSession] = useState<AdminSession | null>(() => {
-    try {
-      const saved = sessionStorage.getItem('hunter_admin_session');
-      if (saved) {
-        return JSON.parse(saved);
-      }
-    } catch {
-      // ignore
-    }
-    return null;
-  });
+  // Admin Session State
+  const [adminSession, setAdminSession] = useState<AdminSession | null>(null);
 
   const [isProfileModalOpen, setIsProfileModalOpen] = useState<boolean>(false);
 
-  // Listen to Google Authentication state exclusively
+  // Listen to Firebase Authentication state
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
         setGoogleUser(user);
-        const { isAdmin, role, name } = await syncUserProfileInFirestore(user);
-        if (isAdmin || user.email === 'gmanikandan639@gmail.com') {
-          setAdminSession({
-            isAuthenticated: true,
-            username: user.email || 'Admin',
-            name: name || user.displayName || 'Manikandan',
-            role: 'Administrator',
-            system: 'Hunter Risk Management',
-            loginTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            token: user.uid,
-          });
-        } else {
-          setAdminSession(null);
+        try {
+          const { isAdmin, role, name } = await syncUserProfileInFirestore(user);
+          if (isAdmin || user.email === 'gmanikandan639@gmail.com') {
+            setAdminSession({
+              isAuthenticated: true,
+              username: user.email || 'Admin',
+              name: name || user.displayName || 'Manikandan',
+              role: 'Administrator',
+              system: 'Hunter Risk Management',
+              loginTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              token: user.uid,
+            });
+            setActivePage((prev) => (prev === 'login' ? 'admin' : prev));
+          } else {
+            setAdminSession(null);
+            setActivePage((prev) => (prev === 'login' || prev === 'admin' ? 'search' : prev));
+          }
+        } catch (e) {
+          console.warn('Profile sync error:', e);
+          if (user.email === 'gmanikandan639@gmail.com') {
+            setAdminSession({
+              isAuthenticated: true,
+              username: user.email,
+              name: user.displayName || 'Manikandan',
+              role: 'Administrator',
+              system: 'Hunter Risk Management',
+              loginTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              token: user.uid,
+            });
+          }
         }
       } else {
         setGoogleUser(null);
         setAdminSession(null);
+        setActivePage('login');
       }
       setIsAuthChecking(false);
     });
@@ -488,11 +497,19 @@ export default function App() {
     }, 5000);
   };
 
-  // Safe Navigation with Auth Guard for Admin Dashboard
+  // Safe Navigation with Auth Guard for Admin Dashboard & Protected Pages
   const handleNavigatePage = (page: ActiveNavPage) => {
+    if (!googleUser) {
+      setActivePage('login');
+      return;
+    }
     if (page === 'admin') {
       if (!adminSession?.isAuthenticated) {
-        setActivePage('login');
+        triggerToast({
+          type: 'error',
+          title: 'Access Restricted',
+          message: 'Admin Dashboard is restricted to authorized Administrator accounts.',
+        });
         return;
       }
     }
@@ -512,7 +529,19 @@ export default function App() {
     });
   };
 
-  // Handle User & Admin Logout (Google Sign-Out)
+  // Handle Standard User Login / Sign Up Success
+  const handleUserLoginSuccess = (user: any) => {
+    setGoogleUser(user);
+    setAdminSession(null);
+    setActivePage('search');
+    triggerToast({
+      type: 'success',
+      title: 'Welcome to Hunter Verification',
+      message: `Signed in as ${user.displayName || user.email}.`,
+    });
+  };
+
+  // Handle User & Admin Logout (Firebase Sign-Out)
   const handleLogout = async () => {
     try {
       await logOut();
@@ -521,11 +550,15 @@ export default function App() {
     }
     setGoogleUser(null);
     setAdminSession(null);
-    setActivePage('search');
+    setActivePage('login');
+    setSearchQuery('');
+    setResults([]);
+    setHasSearched(false);
+    setSelectedRecord(null);
     triggerToast({
       type: 'info',
       title: 'Signed Out',
-      message: 'Exited Admin session. Public Hunter Search is active.',
+      message: 'You have been logged out. Please sign in to access Hunter Verification.',
     });
   };
 
@@ -1371,6 +1404,102 @@ export default function App() {
     }
   };
 
+  // GLOBAL AUTH GUARD 1: Authentication State Verification Loader
+  if (isAuthChecking) {
+    return (
+      <div
+        id="auth-loading-screen"
+        className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 text-white"
+      >
+        <div className="flex flex-col items-center gap-4 animate-in fade-in">
+          <div className="w-16 h-16 rounded-2xl bg-slate-950 border border-slate-800 p-2 shadow-2xl shadow-indigo-950/50 flex items-center justify-center animate-pulse">
+            <img
+              src={BRAND.shieldIcon}
+              alt="Fraud Risk Hub"
+              className="w-full h-full object-cover rounded-xl"
+              referrerPolicy="no-referrer"
+            />
+          </div>
+          <div className="text-center">
+            <h2 className="text-lg font-bold text-white tracking-tight">HUNTER VERIFICATION</h2>
+            <p className="text-xs text-slate-400 mt-1">Verifying authentication session...</p>
+          </div>
+          <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mt-2" />
+        </div>
+      </div>
+    );
+  }
+
+  // GLOBAL AUTH GUARD 2: Force Authentication for all users before any Hunter access
+  if (!googleUser) {
+    return (
+      <div
+        id="app-root"
+        className="min-h-screen bg-slate-100/70 text-slate-900 flex flex-col font-sans selection:bg-indigo-600 selection:text-white"
+      >
+        {/* Unauthenticated Header */}
+        <header
+          id="unauth-header"
+          className="bg-white border-b border-slate-200/90 shadow-xs py-3.5 px-4 sm:px-6"
+        >
+          <div className="max-w-7xl mx-auto flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl overflow-hidden bg-slate-950 border border-slate-800 p-1 flex items-center justify-center shadow-xs">
+                <img
+                  src={BRAND.shieldIcon}
+                  alt="Fraud Risk Hub Logo"
+                  className="w-full h-full object-cover rounded-lg"
+                  referrerPolicy="no-referrer"
+                />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-base font-black tracking-tight text-slate-900">
+                    FRAUD RISK HUB
+                  </span>
+                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-red-50 text-red-700 border border-red-200">
+                    RCU / FCU
+                  </span>
+                </div>
+                <p className="text-[10px] font-bold tracking-wider text-slate-500 uppercase">
+                  Hunter Verification Portal
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                Authentication Required
+              </span>
+            </div>
+          </div>
+        </header>
+
+        {/* Login / Sign-up Screen */}
+        <main
+          id="unauth-main-container"
+          className="flex-1 flex items-center justify-center p-4 sm:p-6"
+        >
+          <AdminLogin
+            onLoginSuccess={handleLoginSuccess}
+            onUserLoginSuccess={handleUserLoginSuccess}
+            onCancel={() => {}}
+          />
+        </main>
+
+        {toast && (
+          <ToastNotification
+            type={toast.type}
+            title={toast.title}
+            message={toast.message}
+            subtext={toast.subtext}
+            onClose={() => setToast(null)}
+          />
+        )}
+      </div>
+    );
+  }
+
   return (
     <div
       id="app-root"
@@ -1456,6 +1585,7 @@ export default function App() {
         {activePage === 'login' && (
           <AdminLogin
             onLoginSuccess={handleLoginSuccess}
+            onUserLoginSuccess={handleUserLoginSuccess}
             onCancel={() => setActivePage('search')}
           />
         )}
@@ -1494,10 +1624,33 @@ export default function App() {
               lastSnapshotTimestamp={lastSnapshotTimestamp}
             />
           ) : (
-            <AdminLogin
-              onLoginSuccess={handleLoginSuccess}
-              onCancel={() => setActivePage('search')}
-            />
+            <div className="text-center py-16 bg-white rounded-2xl border border-slate-200 p-8 shadow-sm max-w-lg mx-auto space-y-4">
+              <div className="w-14 h-14 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center mx-auto shadow-xs">
+                <ShieldAlert className="w-7 h-7 text-amber-600" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Administrator Privileges Required</h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  You are signed in as <strong className="text-slate-800">{googleUser?.displayName || googleUser?.email}</strong> with standard user permissions.
+                </p>
+              </div>
+              <div className="flex items-center justify-center gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setActivePage('search')}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-xs transition-colors cursor-pointer"
+                >
+                  Return to Hunter Search
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActivePage('login')}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-colors cursor-pointer"
+                >
+                  Switch Account
+                </button>
+              </div>
+            </div>
           )
         )}
       </main>

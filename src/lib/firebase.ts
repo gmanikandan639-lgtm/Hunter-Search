@@ -5,6 +5,9 @@ import {
   GoogleAuthProvider,
   signInWithPopup,
   signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  updateProfile,
+  sendPasswordResetEmail,
   signOut as fbSignOut,
   onAuthStateChanged,
   User as FirebaseUser,
@@ -283,74 +286,134 @@ export const logOut = async (): Promise<void> => {
   }
 };
 
+/**
+ * Register a new user with Email + Password via Firebase Auth
+ * Automatically creates Firestore document users/{uid} with role = "user"
+ */
+export const signUpWithEmail = async (
+  fullName: string,
+  email: string,
+  pass: string
+): Promise<{ user: FirebaseUser; profile: { isAdmin: boolean; role: string; name: string } }> => {
+  const cred = await createUserWithEmailAndPassword(auth, email.trim(), pass);
+  if (fullName.trim()) {
+    try {
+      await updateProfile(cred.user, { displayName: fullName.trim() });
+    } catch (e) {
+      console.warn('Profile name update notice:', e);
+    }
+  }
+  const profile = await syncUserProfileInFirestore(cred.user, fullName.trim());
+  return { user: cred.user, profile };
+};
+
+/**
+ * Sign in existing user with Email + Password via Firebase Auth
+ */
+export const signInWithEmail = async (
+  email: string,
+  pass: string
+): Promise<{ user: FirebaseUser; profile: { isAdmin: boolean; role: string; name: string } }> => {
+  const cred = await signInWithEmailAndPassword(auth, email.trim(), pass);
+  const profile = await syncUserProfileInFirestore(cred.user);
+  return { user: cred.user, profile };
+};
+
+/**
+ * Send password reset email via Firebase Auth
+ */
+export const sendPasswordReset = async (email: string): Promise<void> => {
+  await sendPasswordResetEmail(auth, email.trim());
+};
+
 // Synchronize User profile & check admin in Firestore
 export const syncUserProfileInFirestore = async (
-  user: FirebaseUser
+  user: FirebaseUser,
+  overrideName?: string
 ): Promise<{ isAdmin: boolean; role: string; name: string; email: string; photoURL: string }> => {
   try {
     const userDocRef = doc(db, 'users', user.uid);
     const now = new Date().toISOString();
-    const isAdminEmail =
-      user.email === 'gmanikandan639@gmail.com' ||
-      user.email?.endsWith('@hunter.internal') ||
-      user.email === 'hunter_admin@fraudriskhub.com';
 
     const snap = await getDoc(userDocRef);
-    let role = isAdminEmail ? 'admin' : 'user';
 
     if (snap.exists()) {
       const data = snap.data();
-      if (data.role) role = data.role;
-    }
+      // Keep existing role! Never overwrite an admin role with user
+      const existingRole = data.role === 'admin' ? 'admin' : 'user';
+      const userName = overrideName || user.displayName || data.name || user.email?.split('@')[0] || 'User';
 
-    const userName = (snap.exists() && snap.data()?.name) || user.displayName || user.email?.split('@')[0] || 'User';
-    const effectiveRole = isAdminEmail ? 'admin' : role;
-
-    // Required fields: uid, name, email, photoURL, role ("admin"|"user"), createdAt, updatedAt
-    await setDoc(
-      userDocRef,
-      {
-        uid: user.uid,
-        name: userName,
-        email: user.email || '',
-        photoURL: user.photoURL || '',
-        role: effectiveRole,
-        createdAt: snap.exists() && snap.data()?.createdAt ? snap.data().createdAt : serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        displayName: userName,
-        lastLogin: now,
-      },
-      { merge: true }
-    );
-
-    if (effectiveRole === 'admin') {
-      const adminDocRef = doc(db, 'admins', user.uid);
+      // Update non-role profile fields
       await setDoc(
-        adminDocRef,
+        userDocRef,
         {
           uid: user.uid,
-          email: user.email,
+          name: userName,
           displayName: userName,
-          role: 'admin',
-          assignedAt: now,
+          email: user.email || data.email || '',
+          photoURL: user.photoURL || data.photoURL || '',
+          updatedAt: serverTimestamp(),
+          lastLogin: now,
         },
         { merge: true }
       );
-    }
 
-    return {
-      isAdmin: effectiveRole === 'admin',
-      role: effectiveRole,
-      name: userName,
-      email: user.email || '',
-      photoURL: user.photoURL || '',
-    };
+      return {
+        isAdmin: existingRole === 'admin',
+        role: existingRole,
+        name: userName,
+        email: user.email || '',
+        photoURL: user.photoURL || '',
+      };
+    } else {
+      // New account - Default role: "user"
+      // Only demo admin credentials receive admin role automatically on first initialization
+      const defaultRole = user.email === ADMIN_FIREBASE_EMAIL ? 'admin' : 'user';
+      const userName = overrideName || user.displayName || user.email?.split('@')[0] || 'User';
+
+      await setDoc(userDocRef, {
+        uid: user.uid,
+        name: userName,
+        displayName: userName,
+        email: user.email || '',
+        photoURL: user.photoURL || '',
+        role: defaultRole,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        lastLogin: now,
+      });
+
+      if (defaultRole === 'admin') {
+        try {
+          const adminDocRef = doc(db, 'admins', user.uid);
+          await setDoc(
+            adminDocRef,
+            {
+              uid: user.uid,
+              email: user.email,
+              displayName: userName,
+              role: 'admin',
+              assignedAt: now,
+            },
+            { merge: true }
+          );
+        } catch {}
+      }
+
+      return {
+        isAdmin: defaultRole === 'admin',
+        role: defaultRole,
+        name: userName,
+        email: user.email || '',
+        photoURL: user.photoURL || '',
+      };
+    }
   } catch (err) {
     console.warn('Sync user profile note:', err);
     return {
-      isAdmin: user.email === 'gmanikandan639@gmail.com' || user.email === 'hunter_admin@fraudriskhub.com',
-      role: user.email === 'gmanikandan639@gmail.com' || user.email === 'hunter_admin@fraudriskhub.com' ? 'admin' : 'user',
-      name: user.displayName || user.email?.split('@')[0] || 'User',
+      isAdmin: user.email === ADMIN_FIREBASE_EMAIL,
+      role: user.email === ADMIN_FIREBASE_EMAIL ? 'admin' : 'user',
+      name: overrideName || user.displayName || user.email?.split('@')[0] || 'User',
       email: user.email || '',
       photoURL: user.photoURL || '',
     };
@@ -1019,8 +1082,10 @@ export const submitUserHunterRecordToFirestore = async (
         targetRecordId: submission.targetRecordId || '',
         existingRecordId: submission.targetRecordId || '',
         status: 'pending',
-        submittedAt: now,
-        submittedBy: submitterInfo.name || 'Portal User',
+        submittedAt: serverTimestamp(),
+        submittedBy: auth.currentUser?.uid || 'user',
+        submittedByName: submitterInfo.name || auth.currentUser?.displayName || 'User',
+        submittedByEmail: submitterInfo.email || auth.currentUser?.email || '',
         rawColumns: payload.rawColumns || {},
       })
     );

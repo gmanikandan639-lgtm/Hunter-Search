@@ -210,10 +210,11 @@ export const Header: React.FC<HeaderProps> = ({
                 <button
                   id="header-logout-btn"
                   onClick={onLogout}
-                  className="p-2 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 border border-transparent hover:border-rose-200 transition-colors cursor-pointer"
-                  title="Sign Out / Exit Admin Mode"
+                  className="flex items-center gap-1.5 py-1.5 px-3 rounded-xl bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-600 border border-slate-200 hover:border-rose-200 text-xs font-bold transition-colors cursor-pointer"
+                  title="Sign Out"
                 >
-                  <LogOut className="w-4 h-4" />
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Logout</span>
                 </button>
               </div>
             ) : googleUser ? (
@@ -269,29 +270,20 @@ export const Header: React.FC<HeaderProps> = ({
                         {googleUser.displayName || googleUser.email?.split('@')[0]}
                       </span>
                       <span className="text-[9px] font-semibold text-slate-500 uppercase tracking-wider block">
-                        Google Auth
+                        User Auth
                       </span>
                     </div>
                   </div>
                 )}
 
                 <button
-                  id="header-user-logout-btn"
+                  id="header-logout-btn"
                   onClick={onLogout}
-                  className="p-2 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 border border-transparent hover:border-rose-200 transition-colors cursor-pointer"
+                  className="flex items-center gap-1.5 py-1.5 px-3 rounded-xl bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-600 border border-slate-200 hover:border-rose-200 text-xs font-bold transition-colors cursor-pointer"
                   title="Sign Out"
                 >
-                  <LogOut className="w-4 h-4" />
-                </button>
-
-                <button
-                  id="header-admin-portal-btn"
-                  onClick={() => onSelectPage('admin')}
-                  className="flex items-center gap-1.5 py-1.5 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 active:bg-slate-950 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer"
-                  title="Admin Portal"
-                >
-                  <Lock className="w-3.5 h-3.5 text-indigo-300" />
-                  <span className="hidden sm:inline">Admin</span>
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Logout</span>
                 </button>
               </div>
             ) : (
@@ -374,6 +366,16 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <User className="w-3.5 h-3.5" />
               <span>Profile</span>
+            </button>
+          )}
+          {(googleUser || adminSession?.isAuthenticated) && (
+            <button
+              id="mobile-nav-logout"
+              onClick={onLogout}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap text-rose-600 bg-rose-50/80 cursor-pointer"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span>Logout</span>
             </button>
           )}
         </div>
