@@ -108,6 +108,8 @@ export default function App() {
               loginTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
               token: user.uid,
             });
+            seedLiveIdentifiersIfEmpty().catch(() => {});
+            seedDefaultHunterRecordsIfEmpty().catch(() => {});
             setActivePage((prev) => (prev === 'login' ? 'admin' : prev));
           } else {
             setAdminSession(null);
