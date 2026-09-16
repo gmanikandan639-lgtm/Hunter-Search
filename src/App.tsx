@@ -243,6 +243,7 @@ export default function App() {
         fileName: 'No Reference File Uploaded',
         fileSize: '0 KB',
         uploadDate: '—',
+        uploadedAt: '—',
         uploadedBy: '—',
         recordCount: 0,
         columnCount: 0,
@@ -1489,15 +1490,7 @@ export default function App() {
           />
         </main>
 
-        {toast && (
-          <ToastNotification
-            type={toast.type}
-            title={toast.title}
-            message={toast.message}
-            subtext={toast.subtext}
-            onClose={() => setToast(null)}
-          />
-        )}
+        <ToastNotification toast={toast} onDismiss={() => setToast(null)} />
       </div>
     );
   }
@@ -1550,7 +1543,6 @@ export default function App() {
                 adminSession={adminSession}
                 onOpenAddManualRecord={() => setIsAddManualRecordModalOpen(true)}
                 onOpenUserSubmit={() => handleOpenUserSubmit()}
-                pendingApprovalsCount={pendingApprovalsCount}
               />
             </div>
 
@@ -1666,7 +1658,7 @@ export default function App() {
             fileSize: `${Math.round((pendingUpload.file.size / 1024) * 10) / 10} KB`,
             recordCount: pendingUpload.parsed.rowCount,
             columnCount: pendingUpload.parsed.columnCount,
-            bankCount: pendingUpload.parsed.bankCount,
+            bankCount: pendingUpload.parsed.uniqueBanks?.length || 0,
             detectedNameCol: pendingUpload.parsed.detectedNameCol,
             detectedBankCol: pendingUpload.parsed.detectedBankCol,
           }}
