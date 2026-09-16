@@ -30,7 +30,7 @@ import {
   limit,
   serverTimestamp,
 } from 'firebase/firestore';
-import firebaseConfigJson from './firebaseAppletConfig';
+import firebaseAppletConfig from './firebaseAppletConfig';
 import {
   ManualHunterRecord,
   CSVMetadata,
@@ -74,33 +74,33 @@ const getEnv = (key: string): string => {
 
 export const firebaseConfig = {
   projectId:
-    firebaseConfigJson?.projectId ||
+    firebaseAppletConfig?.projectId ||
     getEnv('VITE_FIREBASE_PROJECT_ID') ||
     'fraudriskhub-44639',
   appId:
-    firebaseConfigJson?.appId ||
+    firebaseAppletConfig?.appId ||
     getEnv('VITE_FIREBASE_APP_ID') ||
     '1:880812568591:web:3033cfc6f477247fed337a',
   apiKey:
-    firebaseConfigJson?.apiKey ||
+    firebaseAppletConfig?.apiKey ||
     getEnv('VITE_FIREBASE_API_KEY') ||
     'AIzaSyBDDN3pQECq6xgk6xlFt4N76b61fsSzU3g',
   authDomain:
-    firebaseConfigJson?.authDomain ||
+    firebaseAppletConfig?.authDomain ||
     getEnv('VITE_FIREBASE_AUTH_DOMAIN') ||
     'fraudriskhub-44639.firebaseapp.com',
   storageBucket:
-    firebaseConfigJson?.storageBucket ||
+    firebaseAppletConfig?.storageBucket ||
     getEnv('VITE_FIREBASE_STORAGE_BUCKET') ||
     'fraudriskhub-44639.firebasestorage.app',
   messagingSenderId:
-    firebaseConfigJson?.messagingSenderId ||
+    firebaseAppletConfig?.messagingSenderId ||
     getEnv('VITE_FIREBASE_MESSAGING_SENDER_ID') ||
     '880812568591',
 };
 
 export const customDatabaseId =
-  firebaseConfigJson?.firestoreDatabaseId ||
+  (firebaseAppletConfig as { firestoreDatabaseId?: string })?.firestoreDatabaseId ||
   getEnv('VITE_FIREBASE_DATABASE_ID') ||
   'ai-studio-fraudriskhub-1bc1949c-52b4-459b-8fe4-430de62c4958';
 
