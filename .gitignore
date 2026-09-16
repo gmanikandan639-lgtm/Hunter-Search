@@ -25,7 +25,6 @@ service-account*.json
 serviceAccount*.json
 *-credentials.json
 credentials.json
-firebase-applet-config.json
 
 # Operating System and IDE files
 .DS_Store
