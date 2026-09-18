@@ -82,7 +82,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
       setSuccessMessage('Administrator verified. Opening Admin Dashboard...');
       setTimeout(() => {
         onLoginSuccess(adminSession);
-      }, 400);
+      }, 50);
     } else {
       setSuccessMessage('Authentication successful. Opening Hunter Verification...');
       setTimeout(() => {
@@ -100,7 +100,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
             token: user.uid,
           });
         }
-      }, 400);
+      }, 50);
     }
   };
 

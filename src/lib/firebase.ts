@@ -2133,9 +2133,14 @@ export const subscribeToVisitorStats = (
         (docSnap) => {
           if (docSnap.exists()) {
             const d = docSnap.data();
+            const now = Date.now();
+            const periodStart = d.periodStartedAt || (d.lastVisit ? new Date(d.lastVisit).getTime() : now);
+            const is24HoursExpired = now - periodStart >= 24 * 60 * 60 * 1000;
+
             callback({
               totalVisits: d.totalVisits || 1421,
-              todayVisits: d.todayVisits || 69,
+              // If the 24-hour window has lapsed and hasn't been written to yet, display 0 for active period until next visit
+              todayVisits: is24HoursExpired ? 0 : (d.todayVisits || 0),
               lastVisit: d.lastVisit || new Date().toISOString(),
               uniqueSessions: d.uniqueSessions || d.totalVisits || 1421,
             });
@@ -2166,25 +2171,48 @@ export const incrementVisitorStatsInFirestore = async (
   try {
     const docRef = doc(db, STATS_COLLECTION, STATS_DOC);
     const snap = await getDoc(docRef);
-    const nowStr = new Date().toISOString();
+    const now = Date.now();
+    const nowStr = new Date(now).toISOString();
+    const todayDateKey = nowStr.slice(0, 10);
+
     if (!snap.exists()) {
       await setDoc(docRef, {
         totalVisits: 1422,
-        todayVisits: 70,
+        todayVisits: 1,
+        periodStartedAt: now,
+        periodDateKey: todayDateKey,
         uniqueSessions: 1422,
         lastVisit: nowStr,
       });
     } else {
       const data = snap.data();
-      const prevDate = data.lastVisit ? data.lastVisit.split('T')[0] : '';
-      const todayDate = nowStr.split('T')[0];
-      const isNewDay = prevDate !== todayDate;
+      const periodStart = data.periodStartedAt || (data.lastVisit ? new Date(data.lastVisit).getTime() : now);
+      // Check if 24 hours (86,400,000 ms) have passed OR the calendar day key changed
+      const is24HoursExpired = (now - periodStart >= 24 * 60 * 60 * 1000) || (data.periodDateKey && data.periodDateKey !== todayDateKey);
+
+      let newTodayVisits: number;
+      let newPeriodStartedAt: number;
+      let newPeriodDateKey: string;
+
+      if (is24HoursExpired) {
+        // Reset count for the new 24-hour period
+        newTodayVisits = 1;
+        newPeriodStartedAt = now;
+        newPeriodDateKey = todayDateKey;
+      } else {
+        newTodayVisits = (data.todayVisits || 0) + 1;
+        newPeriodStartedAt = data.periodStartedAt || now;
+        newPeriodDateKey = data.periodDateKey || todayDateKey;
+      }
 
       await setDoc(
         docRef,
         {
           totalVisits: (data.totalVisits || 1421) + 1,
-          todayVisits: isNewDay ? 1 : (data.todayVisits || 69) + 1,
+          todayVisits: newTodayVisits,
+          periodStartedAt: newPeriodStartedAt,
+          periodDateKey: newPeriodDateKey,
+          previousPeriodCount: is24HoursExpired ? (data.todayVisits || 0) : (data.previousPeriodCount || 0),
           uniqueSessions: isNewSession
             ? (data.uniqueSessions || data.totalVisits || 1421) + 1
             : data.uniqueSessions || data.totalVisits || 1421,
@@ -2251,11 +2279,11 @@ export const subscribeToLiveIdentifiers = (
               source: d.source || 'Cloud Firestore',
               status: (d.status as any) || 'approved',
               createdBy: d.createdBy || 'Administrator',
-              createdAt: d.createdAt || new Date().toISOString(),
+              createdAt: safeFormatDate(d.createdAt) || (typeof d.createdAt === 'string' ? d.createdAt : new Date().toISOString()),
               updatedBy: d.updatedBy,
-              updatedAt: d.updatedAt,
+              updatedAt: safeFormatDate(d.updatedAt) || (typeof d.updatedAt === 'string' ? d.updatedAt : undefined),
               approvedBy: d.approvedBy,
-              approvedAt: d.approvedAt,
+              approvedAt: safeFormatDate(d.approvedAt) || (typeof d.approvedAt === 'string' ? d.approvedAt : undefined),
               hunterId: rawId,
               name: d.name || rawId,
               rawColumns: d.rawColumns || {},
@@ -2263,11 +2291,13 @@ export const subscribeToLiveIdentifiers = (
           }
         });
 
-        // Sort descending by approval / update timestamp
+        // Sort descending by approval / update timestamp safely
         liveList.sort((a, b) => {
-          const tA = new Date(a.updatedAt || a.approvedAt || a.createdAt).getTime();
-          const tB = new Date(b.updatedAt || b.approvedAt || b.createdAt).getTime();
-          return tB - tA;
+          const dateStrA = safeFormatDate(a.updatedAt) || safeFormatDate(a.approvedAt) || safeFormatDate(a.createdAt);
+          const dateStrB = safeFormatDate(b.updatedAt) || safeFormatDate(b.approvedAt) || safeFormatDate(b.createdAt);
+          const tA = dateStrA ? new Date(dateStrA).getTime() : 0;
+          const tB = dateStrB ? new Date(dateStrB).getTime() : 0;
+          return (Number.isNaN(tB) ? 0 : tB) - (Number.isNaN(tA) ? 0 : tA);
         });
 
         const nowTime = new Date();
@@ -2880,85 +2910,173 @@ export const searchLiveIdentifiersInFirestore = async (
 };
 
 /**
- * Section 12: Production Admin CSV Export from Firestore
- * The CSV is ALWAYS generated from the current Firestore collection: live_identifiers
- * Flow:
- * Admin clicks Download LIVE CSV -> Fresh query to Firestore live_identifiers -> Generate CSV -> Download
- * Filename: hunter_identifiers_YYYY-MM-DD_HH-mm-ss.csv
- * Fields: Identifier, Normalized Identifier, Bank / NBFC, Details, Source, Status, Created At, Updated At, Approved By, Approved At
+ * Safe date formatting helper for Firestore export
+ * Supports:
+ * - Firestore Timestamp (with .toDate() method)
+ * - Serialized Firestore timestamps with seconds / nanoseconds
+ * - JavaScript Date instances
+ * - Numeric timestamps
+ * - Valid ISO / date strings
+ *
+ * If a date/time value is null, undefined, empty, invalid, or unsupported,
+ * returns an empty string ("") without throwing an error.
+ */
+export function safeFormatDate(value: any): string {
+  if (value === null || value === undefined || value === '') return '';
+
+  try {
+    let date: Date;
+
+    if (value?.toDate && typeof value.toDate === 'function') {
+      date = value.toDate();
+    } else if (typeof value === 'object' && typeof value.seconds === 'number') {
+      date = new Date(value.seconds * 1000 + Math.floor((value.nanoseconds || 0) / 1000000));
+    } else if (typeof value === 'object' && typeof value._seconds === 'number') {
+      date = new Date(value._seconds * 1000 + Math.floor((value._nanoseconds || 0) / 1000000));
+    } else if (value instanceof Date) {
+      date = value;
+    } else if (typeof value === 'number') {
+      date = new Date(value);
+    } else if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (!trimmed) return '';
+      date = new Date(trimmed);
+    } else {
+      return '';
+    }
+
+    if (!date || Number.isNaN(date.getTime())) {
+      return '';
+    }
+
+    return date.toISOString();
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Section 12: Admin-Only Overall Identifier Download from Firestore
+ * On a single click, fetch all current records directly from Firestore collection: live_identifiers
+ * Verified strictly using Firestore: users/{uid}.role == "admin"
+ * Filename: Hunter_Overall_Identifier_Details.csv
  */
 export const exportLiveIdentifiersDirectFromFirestore = async (): Promise<{
   count: number;
   filename: string;
 }> => {
-  await ensureAdminFirebaseAuthenticated();
+  const currentUser = auth.currentUser;
+  if (!currentUser) {
+    throw new Error('Authentication required to export records.');
+  }
+
+  // Admin must be verified using Firestore: users/{uid}.role == "admin"
+  const userDocSnap = await getDoc(doc(db, 'users', currentUser.uid));
+  if (!userDocSnap.exists() || userDocSnap.data()?.role !== 'admin') {
+    throw new Error('Access denied: Administrator role verified via Firestore users/{uid}.role == "admin" is required.');
+  }
 
   // Fresh direct query to Cloud Firestore collection: live_identifiers
   const colRef = collection(db, LIVE_IDENTIFIERS_COLLECTION);
   const snap = await getDocs(colRef);
 
   if (snap.empty) {
-    throw new Error('No LIVE identifiers available for export.');
+    throw new Error('No live identifier records available for download.');
   }
 
   const escapeCSV = (val: any) => {
-    const s = String(val ?? '').replace(/"/g, '""');
+    if (val === null || val === undefined) return '""';
+    const s = String(val).replace(/"/g, '""');
     return `"${s}"`;
   };
 
   const headers = [
     'Identifier',
     'Normalized Identifier',
-    'Bank / NBFC',
+    'Bank Name',
     'Details',
     'Source',
     'Status',
-    'Created At',
-    'Updated At',
+    'Created Date',
+    'Updated Date',
+    'Created By',
+    'Updated By',
     'Approved By',
-    'Approved At',
+    'Approved Date',
+    'Submitted At',
+    'Rejected At',
+    'Organization Type',
+    'Remarks',
   ];
 
   const rows = snap.docs.map((d) => {
-    const r = d.data() as LiveIdentifierRecord;
+    const r = d.data() as any;
     const cleanId = (r.identifier || r.hunterId || d.id || '').toString().trim();
     const norm = r.normalizedIdentifier || getNormalizedIdentifier(cleanId);
-    const bank = (
+    const bankName = (
       r.bankName ||
+      r.rawColumns?.['Bank Name'] ||
       r.rawColumns?.['Bank/NBFC Name'] ||
       r.rawColumns?.['Bank-NBFC'] ||
-      'Financial Institution'
-    )
-      .toString()
-      .trim();
+      ''
+    ).toString().trim();
     const details = (r.details || r.name || '').toString().trim();
     const source = (r.source || 'Master Live Database').toString().trim();
     const status = (r.status || 'live').toString().trim();
-    const createdAt = r.createdAt ? new Date(r.createdAt).toISOString() : '';
-    const updatedAt = r.updatedAt ? new Date(r.updatedAt).toISOString() : '';
-    const approvedBy = (r.approvedBy || r.createdBy || 'Administrator').toString().trim();
-    const approvedAt = r.approvedAt ? new Date(r.approvedAt).toISOString() : '';
+
+    // Safely parse and format all date/time fields
+    const createdDate =
+      safeFormatDate(r.createdAt) ||
+      safeFormatDate(r.createdDate) ||
+      safeFormatDate(r.rawColumns?.['Created Date']) ||
+      safeFormatDate(r.rawColumns?.['CreatedAt']);
+    const updatedDate =
+      safeFormatDate(r.updatedAt) ||
+      safeFormatDate(r.updatedDate) ||
+      safeFormatDate(r.rawColumns?.['Updated Date']) ||
+      safeFormatDate(r.rawColumns?.['UpdatedAt']);
+    const createdBy = (r.createdBy || 'Administrator').toString().trim();
+    const updatedBy = (r.updatedBy || r.approvedBy || 'Administrator').toString().trim();
+    const approvedBy = (r.approvedBy || '').toString().trim();
+    const approvedDate =
+      safeFormatDate(r.approvedAt) ||
+      safeFormatDate(r.approvedDate) ||
+      safeFormatDate(r.rawColumns?.['Approved Date']) ||
+      safeFormatDate(r.rawColumns?.['ApprovedAt']);
+    const submittedAt =
+      safeFormatDate(r.submittedAt) ||
+      safeFormatDate(r.submittedDate) ||
+      safeFormatDate(r.rawColumns?.['Submitted At']) ||
+      safeFormatDate(r.rawColumns?.['SubmittedAt']);
+    const rejectedAt =
+      safeFormatDate(r.rejectedAt) ||
+      safeFormatDate(r.rejectedDate) ||
+      safeFormatDate(r.rawColumns?.['Rejected At']) ||
+      safeFormatDate(r.rawColumns?.['RejectedAt']);
+    const orgType = (r.orgType || r.rawColumns?.['Bank / NBFC'] || r.rawColumns?.['Org Type'] || 'Bank').toString().trim();
+    const remarks = (r.remarks || r.comments || '').toString().trim();
 
     return [
       escapeCSV(cleanId),
       escapeCSV(norm),
-      escapeCSV(bank),
+      escapeCSV(bankName),
       escapeCSV(details),
       escapeCSV(source),
       escapeCSV(status),
-      escapeCSV(createdAt),
-      escapeCSV(updatedAt),
+      escapeCSV(createdDate),
+      escapeCSV(updatedDate),
+      escapeCSV(createdBy),
+      escapeCSV(updatedBy),
       escapeCSV(approvedBy),
-      escapeCSV(approvedAt),
+      escapeCSV(approvedDate),
+      escapeCSV(submittedAt),
+      escapeCSV(rejectedAt),
+      escapeCSV(orgType),
+      escapeCSV(remarks),
     ].join(',');
   });
 
-  const now = new Date();
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const datePart = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-  const timePart = `${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
-  const filename = `hunter_identifiers_${datePart}_${timePart}.csv`;
-
+  const filename = 'Hunter_Overall_Identifier_Details.csv';
   const csvContent = '\uFEFF' + [headers.map(escapeCSV).join(','), ...rows].join('\r\n');
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
@@ -2979,47 +3097,101 @@ export const exportLiveIdentifiersDirectFromFirestore = async (): Promise<{
  */
 export const downloadLiveIdentifiersAsCSV = (records: LiveIdentifierRecord[]): void => {
   if (!records || records.length === 0) {
-    throw new Error('No LIVE identifiers available for export.');
+    throw new Error('No live identifier records available for download.');
   }
 
   const headers = [
     'Identifier',
     'Normalized Identifier',
-    'Bank / NBFC',
+    'Bank Name',
     'Details',
     'Source',
     'Status',
-    'Created At',
-    'Updated At',
+    'Created Date',
+    'Updated Date',
+    'Created By',
+    'Updated By',
     'Approved By',
-    'Approved At',
+    'Approved Date',
+    'Submitted At',
+    'Rejected At',
+    'Organization Type',
+    'Remarks',
   ];
 
   const escapeCSV = (val: any) => {
-    const s = String(val ?? '').replace(/"/g, '""');
+    if (val === null || val === undefined) return '""';
+    const s = String(val).replace(/"/g, '""');
     return `"${s}"`;
   };
 
-  const rows = records.map((r) => [
-    escapeCSV(r.identifier || r.hunterId || r.id),
-    escapeCSV(r.normalizedIdentifier || getNormalizedIdentifier(r.identifier || r.hunterId || r.id)),
-    escapeCSV(r.bankName),
-    escapeCSV(r.details),
-    escapeCSV(r.source),
-    escapeCSV(r.status),
-    escapeCSV(r.createdAt ? new Date(r.createdAt).toISOString() : ''),
-    escapeCSV(r.updatedAt ? new Date(r.updatedAt).toISOString() : ''),
-    escapeCSV(r.approvedBy || r.createdBy || 'Administrator'),
-    escapeCSV(r.approvedAt ? new Date(r.approvedAt).toISOString() : ''),
-  ]);
+  const rows = records.map((r: any) => {
+    const cleanId = (r.identifier || r.hunterId || r.id || '').toString().trim();
+    const norm = r.normalizedIdentifier || getNormalizedIdentifier(cleanId);
+    const bankName = (
+      r.bankName ||
+      r.rawColumns?.['Bank Name'] ||
+      r.rawColumns?.['Bank/NBFC Name'] ||
+      r.rawColumns?.['Bank-NBFC'] ||
+      ''
+    ).toString().trim();
+    const details = (r.details || r.name || '').toString().trim();
+    const source = (r.source || 'Master Live Database').toString().trim();
+    const status = (r.status || 'live').toString().trim();
 
-  const now = new Date();
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const datePart = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-  const timePart = `${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
-  const filename = `hunter_identifiers_${datePart}_${timePart}.csv`;
+    const createdDate =
+      safeFormatDate(r.createdAt) ||
+      safeFormatDate(r.createdDate) ||
+      safeFormatDate(r.rawColumns?.['Created Date']) ||
+      safeFormatDate(r.rawColumns?.['CreatedAt']);
+    const updatedDate =
+      safeFormatDate(r.updatedAt) ||
+      safeFormatDate(r.updatedDate) ||
+      safeFormatDate(r.rawColumns?.['Updated Date']) ||
+      safeFormatDate(r.rawColumns?.['UpdatedAt']);
+    const createdBy = (r.createdBy || 'Administrator').toString().trim();
+    const updatedBy = (r.updatedBy || r.approvedBy || 'Administrator').toString().trim();
+    const approvedBy = (r.approvedBy || '').toString().trim();
+    const approvedDate =
+      safeFormatDate(r.approvedAt) ||
+      safeFormatDate(r.approvedDate) ||
+      safeFormatDate(r.rawColumns?.['Approved Date']) ||
+      safeFormatDate(r.rawColumns?.['ApprovedAt']);
+    const submittedAt =
+      safeFormatDate(r.submittedAt) ||
+      safeFormatDate(r.submittedDate) ||
+      safeFormatDate(r.rawColumns?.['Submitted At']) ||
+      safeFormatDate(r.rawColumns?.['SubmittedAt']);
+    const rejectedAt =
+      safeFormatDate(r.rejectedAt) ||
+      safeFormatDate(r.rejectedDate) ||
+      safeFormatDate(r.rawColumns?.['Rejected At']) ||
+      safeFormatDate(r.rawColumns?.['RejectedAt']);
+    const orgType = (r.orgType || r.rawColumns?.['Bank / NBFC'] || r.rawColumns?.['Org Type'] || 'Bank').toString().trim();
+    const remarks = (r.remarks || r.comments || '').toString().trim();
 
-  const csvContent = '\uFEFF' + [headers.map(escapeCSV).join(','), ...rows.map((row) => row.join(','))].join('\r\n');
+    return [
+      escapeCSV(cleanId),
+      escapeCSV(norm),
+      escapeCSV(bankName),
+      escapeCSV(details),
+      escapeCSV(source),
+      escapeCSV(status),
+      escapeCSV(createdDate),
+      escapeCSV(updatedDate),
+      escapeCSV(createdBy),
+      escapeCSV(updatedBy),
+      escapeCSV(approvedBy),
+      escapeCSV(approvedDate),
+      escapeCSV(submittedAt),
+      escapeCSV(rejectedAt),
+      escapeCSV(orgType),
+      escapeCSV(remarks),
+    ].join(',');
+  });
+
+  const filename = 'Hunter_Overall_Identifier_Details.csv';
+  const csvContent = '\uFEFF' + [headers.map(escapeCSV).join(','), ...rows].join('\r\n');
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');

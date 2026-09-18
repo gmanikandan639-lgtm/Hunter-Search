@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { BRAND } from '../assets/branding';
 import {
   CSVMetadata,
@@ -17,6 +17,7 @@ import {
   AlertCircle,
   PlusCircle,
 } from 'lucide-react';
+import { auth } from '../lib/firebase';
 
 interface SearchPanelProps {
   csvMetadata: CSVMetadata;
@@ -29,6 +30,7 @@ interface SearchPanelProps {
   isSearching: boolean;
   onRemapColumns?: (nameCol: string, bankCol: string) => void;
   adminSession?: AdminSession | null;
+  currentUser?: any;
   onOpenAddManualRecord?: () => void;
   onOpenUserSubmit?: () => void;
 }
@@ -40,12 +42,41 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({
   onExecuteSearch,
   isSearching,
   adminSession,
+  currentUser,
   onOpenAddManualRecord,
   onOpenUserSubmit,
 }) => {
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [isFocused, setIsFocused] = useState<boolean>(false);
+  const [isTyping, setIsTyping] = useState<boolean>(false);
+  const [firebaseUser, setFirebaseUser] = useState<any>(currentUser || auth.currentUser);
+  const typingTimerRef = React.useRef<any>(null);
+
+  useEffect(() => {
+    const unsub = auth.onAuthStateChanged((user) => {
+      setFirebaseUser(user);
+    });
+    return () => unsub();
+  }, []);
 
   const hasActiveData = csvMetadata.status === 'ACTIVE' && csvMetadata.recordCount > 0;
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setSearchQuery(e.target.value);
+    if (validationError) setValidationError(null);
+    setIsTyping(true);
+    if (typingTimerRef.current) {
+      clearTimeout(typingTimerRef.current);
+    }
+    typingTimerRef.current = setTimeout(() => {
+      setIsTyping(false);
+    }, 1500);
+  };
+
+  // Running animated border is active when a logged-in user is typing, focusing on the search bar, or searching
+  const isLoggedIn = Boolean(adminSession?.isAuthenticated || currentUser || firebaseUser || auth.currentUser);
+  const isActivelyUsing = isSearching || isTyping || isFocused;
+  const isRunningBorderActive = isLoggedIn && isActivelyUsing;
 
   const handleSearchSubmit = (e?: React.FormEvent) => {
     if (e) {
@@ -157,39 +188,47 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({
             Hunter Identifier Number
           </label>
 
-          <div className="relative">
-            <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-              <Search className="w-4 h-4 text-indigo-600" />
+          <div
+            id="hunter-search-input-wrapper"
+            className={`relative rounded-xl p-[2px] transition-all duration-300 ${
+              isRunningBorderActive ? 'hunter-search-running-border' : 'bg-transparent'
+            }`}
+          >
+            <div className="relative z-10 rounded-[10px] overflow-hidden bg-white">
+              <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                <Search className="w-4 h-4 text-indigo-600" />
+              </div>
+
+              <input
+                id="hunter-identifier-input"
+                type="text"
+                value={searchQuery}
+                onChange={handleInputChange}
+                onFocus={() => setIsFocused(true)}
+                onBlur={() => setIsFocused(false)}
+                onKeyDown={handleKeyDown}
+                placeholder="Enter or paste Hunter Identifier…"
+                className={`w-full pl-10 pr-10 py-3.5 bg-slate-50 hover:bg-white focus:bg-white text-slate-900 text-sm font-medium rounded-[10px] border transition-all outline-hidden placeholder:text-slate-400 ${
+                  isRunningBorderActive
+                    ? 'border-transparent focus:border-transparent'
+                    : validationError
+                    ? 'border-rose-400 focus:border-rose-600 focus:ring-2 focus:ring-rose-100'
+                    : 'border-slate-300 focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100'
+                }`}
+              />
+
+              {searchQuery && (
+                <button
+                  id="clear-search-input-btn"
+                  type="button"
+                  onClick={handleClearInput}
+                  className="absolute inset-y-0 right-3 flex items-center text-slate-400 hover:text-slate-700 transition-colors p-1 cursor-pointer"
+                  title="Clear input"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
             </div>
-
-            <input
-              id="hunter-identifier-input"
-              type="text"
-              value={searchQuery}
-              onChange={(e) => {
-                setSearchQuery(e.target.value);
-                if (validationError) setValidationError(null);
-              }}
-              onKeyDown={handleKeyDown}
-              placeholder="Enter or paste Hunter Identifier…"
-              className={`w-full pl-10 pr-10 py-3.5 bg-slate-50 hover:bg-white focus:bg-white text-slate-900 text-sm font-medium rounded-xl border transition-all outline-hidden placeholder:text-slate-400 ${
-                validationError
-                  ? 'border-rose-400 focus:border-rose-600 focus:ring-2 focus:ring-rose-100'
-                  : 'border-slate-300 focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100'
-              }`}
-            />
-
-            {searchQuery && (
-              <button
-                id="clear-search-input-btn"
-                type="button"
-                onClick={handleClearInput}
-                className="absolute inset-y-0 right-3 flex items-center text-slate-400 hover:text-slate-700 transition-colors p-1 cursor-pointer"
-                title="Clear input"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            )}
           </div>
 
           {/* Inline Validation Error */}

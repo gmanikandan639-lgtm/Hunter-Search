@@ -1,1 +1,68 @@
 @import "tailwindcss";
+
+@keyframes hunter-running-red-blue {
+  0% {
+    transform: translate(-50%, -50%) rotate(0deg);
+  }
+  100% {
+    transform: translate(-50%, -50%) rotate(360deg);
+  }
+}
+
+.hunter-search-running-border {
+  position: relative;
+  overflow: hidden;
+  border-radius: 0.75rem;
+  box-shadow: 0 0 16px rgba(239, 68, 68, 0.35), 0 0 16px rgba(37, 99, 235, 0.35);
+  transition: box-shadow 0.3s ease;
+}
+
+.hunter-search-running-border::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 300%;
+  min-width: 900px;
+  height: 300%;
+  min-height: 900px;
+  background: conic-gradient(
+    from 0deg,
+    #ef4444 0deg,
+    #f87171 40deg,
+    #2563eb 90deg,
+    #60a5fa 130deg,
+    #dc2626 180deg,
+    #ef4444 220deg,
+    #1d4ed8 270deg,
+    #3b82f6 320deg,
+    #ef4444 360deg
+  );
+  animation: hunter-running-red-blue 3s linear infinite;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.hunter-search-running-border::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 300%;
+  min-width: 900px;
+  height: 300%;
+  min-height: 900px;
+  background: conic-gradient(
+    from 0deg,
+    rgba(239, 68, 68, 0.75) 0deg,
+    rgba(37, 99, 235, 0.75) 90deg,
+    rgba(220, 38, 38, 0.75) 180deg,
+    rgba(29, 78, 216, 0.75) 270deg,
+    rgba(239, 68, 68, 0.75) 360deg
+  );
+  filter: blur(8px);
+  animation: hunter-running-red-blue 3s linear infinite;
+  pointer-events: none;
+  z-index: 0;
+}
+

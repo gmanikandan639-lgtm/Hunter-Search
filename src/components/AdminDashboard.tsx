@@ -569,12 +569,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </p>
                 </div>
                 <button
+                  id="admin-download-overall-identifiers-btn"
                   type="button"
                   onClick={onExportDataset}
                   className="shrink-0 px-4 py-2.5 rounded-xl bg-white hover:bg-indigo-50 text-indigo-900 text-xs font-black shadow-sm flex items-center gap-2 transition-all cursor-pointer"
                 >
                   <Download className="w-4 h-4 text-indigo-700" />
-                  <span>Download Complete LIVE CSV</span>
+                  <span>Download Overall Identifier Details</span>
                 </button>
               </div>
 
@@ -1187,7 +1188,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         title="Download active Hunter Identifier dataset as CSV (Admin Exclusive)"
                       >
                         <Download className="w-3.5 h-3.5" />
-                        <span>Download LIVE Dataset (CSV)</span>
+                        <span>Download Overall Identifier Details</span>
                       </button>
                     )}
                     {hasData && (
@@ -1404,7 +1405,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               <td className="py-3 px-4">
                                 <div className="flex items-center gap-2">
                                   <span className="font-mono font-bold text-indigo-700">
-                                    {maskIdentifierNumber(record.hunterId || record.name)}
+                                    {record.hunterId || record.name}
                                   </span>
                                   {isManual && (
                                     <span className="px-1.5 py-0.2 rounded text-[9px] font-extrabold bg-indigo-50 text-indigo-700 border border-indigo-200">

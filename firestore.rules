@@ -7,12 +7,11 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // Admin authorization: based on users/{uid}.role == "admin" and designated admin accounts
+    // Admin authorization: strictly based on users/{uid}.role == "admin"
     function isAdmin() {
       return isAuthenticated() && (
-        (request.auth.token.email == 'gmanikandan639@gmail.com' || request.auth.token.email == 'hunter_admin@fraudriskhub.com') ||
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
       );
     }
 

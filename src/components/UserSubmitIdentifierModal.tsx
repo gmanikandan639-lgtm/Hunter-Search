@@ -18,7 +18,6 @@ import {
   Landmark,
   Check,
   Sparkles,
-  FileText,
 } from 'lucide-react';
 import { submitUserHunterRecordToFirestore } from '../lib/firebase';
 import { RecordItem, ManualHunterRecord } from '../types';
@@ -32,6 +31,7 @@ interface UserSubmitIdentifierModalProps {
   initialRecord?: RecordItem | null;
   mode?: 'new' | 'update';
   currentUser?: any;
+  isAdmin?: boolean;
   liveIdentifiers?: any[];
   onSuccess?: (submissionId: string, hunterId: string, newRecord?: ManualHunterRecord) => void;
   onSubmitSuccess?: (submissionId: string, hunterId: string, newRecord?: ManualHunterRecord) => void;
@@ -44,6 +44,7 @@ export const UserSubmitIdentifierModal: React.FC<UserSubmitIdentifierModalProps>
   initialRecord,
   mode = 'new',
   currentUser,
+  isAdmin = false,
   liveIdentifiers = [],
   onSuccess,
   onSubmitSuccess,
@@ -125,7 +126,18 @@ export const UserSubmitIdentifierModal: React.FC<UserSubmitIdentifierModalProps>
     setError(null);
 
     const cleanHunterId = hunterId.trim();
-    const effectiveBank = (bankName === '__NEW__' ? customBank : bankName).trim();
+    const isUpdate = submissionType === 'update';
+    const isNormalUserUpdate = isUpdate && !isAdmin;
+
+    // For normal user update where Organisation Name is hidden, safely preserve existing Organisation Name
+    const fallbackBank =
+      initialRecord?.bankName ||
+      initialRecord?.rawColumns?.['Organisation Name'] ||
+      initialRecord?.rawColumns?.['Bank/NBFC Name'] ||
+      initialRecord?.rawColumns?.['Bank Name'] ||
+      '';
+
+    const effectiveBank = (bankName === '__NEW__' ? customBank : bankName).trim() || fallbackBank;
 
     if (!cleanHunterId) {
       setError('Please enter a valid Hunter Identifier Number.');
@@ -137,15 +149,14 @@ export const UserSubmitIdentifierModal: React.FC<UserSubmitIdentifierModalProps>
       return;
     }
 
-    if (!effectiveBank) {
-      setError('Organisation / Bank Name is required.');
+    if (!effectiveBank && !isNormalUserUpdate) {
+      setError('Organisation Name is required.');
       return;
     }
 
     setIsSubmitting(true);
 
     try {
-      const isUpdate = submissionType === 'update';
       const recordStatus = initialRecord?.status || 'Active Reference';
       const submitterName =
         currentUser?.displayName || currentUser?.name || currentUser?.email?.split('@')[0] || 'User';
@@ -317,12 +328,14 @@ export const UserSubmitIdentifierModal: React.FC<UserSubmitIdentifierModalProps>
                 <span className="text-slate-500 font-medium">Identifier:</span>
                 <span className="font-mono font-bold text-slate-800">{hunterId}</span>
               </div>
-              <div className="flex justify-between items-center pb-2 border-b border-slate-200">
-                <span className="text-slate-500 font-medium">Organisation:</span>
-                <span className="font-semibold text-slate-800">
-                  {bankName === '__NEW__' ? customBank : bankName} ({orgType})
-                </span>
-              </div>
+              {!(submissionType === 'update' && !isAdmin) && (
+                <div className="flex justify-between items-center pb-2 border-b border-slate-200">
+                  <span className="text-slate-500 font-medium">Organisation:</span>
+                  <span className="font-semibold text-slate-800">
+                    {(bankName === '__NEW__' ? customBank : bankName) || initialRecord?.bankName || 'Recorded'} ({orgType})
+                  </span>
+                </div>
+              )}
               <div className="flex justify-between items-center">
                 <span className="text-slate-500 font-medium">Workflow:</span>
                 <span className="inline-flex items-center gap-1 font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
@@ -364,8 +377,12 @@ export const UserSubmitIdentifierModal: React.FC<UserSubmitIdentifierModalProps>
                 <div className="text-xs space-y-0.5">
                   <div className="font-bold">Updating Existing Hunter Identifier</div>
                   <div className="text-[11px] text-indigo-800">
-                    Original record: <span className="font-mono font-semibold">{initialRecord.hunterId || initialRecord.id}</span> ({initialRecord.bankName}).
-                    Your proposed updates will be submitted to the Admin Approval queue for review.
+                    Original record:{' '}
+                    <span className="font-mono font-semibold">
+                      {initialRecord.hunterId || initialRecord.id}
+                    </span>
+                    {isAdmin && initialRecord.bankName ? ` (${initialRecord.bankName})` : ''}.
+                    {' '}Your proposed updates will be submitted to the Admin Approval queue for review.
                   </div>
                 </div>
               </div>
@@ -512,72 +529,42 @@ export const UserSubmitIdentifierModal: React.FC<UserSubmitIdentifierModalProps>
               </div>
             </div>
 
-            {/* Category 3: Bank/NBFC Name */}
-            <div className="space-y-2 pt-2 border-t border-slate-100">
-              <div className="flex items-center gap-1.5 text-slate-900 font-bold uppercase tracking-wider text-[11px]">
-                <Building2 className="w-3.5 h-3.5 text-indigo-600" />
-                <span>Bank / NBFC Name <span className="text-rose-500">*</span></span>
+            {/* Category 3: Organisation Name - Hidden completely for Normal Users during updates */}
+            {!(submissionType === 'update' && !isAdmin) && (
+              <div id="user-organisation-name-field-group" className="space-y-2 pt-2 border-t border-slate-100">
+                <div className="flex items-center gap-1.5 text-slate-900 font-bold uppercase tracking-wider text-[11px]">
+                  <Building2 className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>Organisation Name <span className="text-rose-500">*</span></span>
+                </div>
+
+                <select
+                  id="user-bank-select"
+                  value={bankName}
+                  onChange={(e) => setBankName(e.target.value)}
+                  className="w-full px-3.5 py-2.5 text-xs font-semibold text-slate-900 bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:border-indigo-600 outline-hidden cursor-pointer"
+                >
+                  <option value="">-- Select Organisation Name --</option>
+                  {uniqueBanks.map((bank) => (
+                    <option key={bank} value={bank}>
+                      {bank}
+                    </option>
+                  ))}
+                  <option value="__NEW__">+ Add New Organisation</option>
+                </select>
+
+                {bankName === '__NEW__' && (
+                  <input
+                    id="user-custom-bank-input"
+                    type="text"
+                    required
+                    value={customBank}
+                    onChange={(e) => setCustomBank(e.target.value)}
+                    placeholder="Enter Organisation Name (e.g. HDFC Bank, Bajaj Finance)"
+                    className="w-full mt-1.5 px-3.5 py-2.5 text-xs font-semibold text-slate-900 bg-white border border-indigo-400 rounded-xl focus:ring-2 focus:ring-indigo-100 outline-hidden"
+                  />
+                )}
               </div>
-
-              <select
-                id="user-bank-select"
-                value={bankName}
-                onChange={(e) => setBankName(e.target.value)}
-                className="w-full px-3.5 py-2.5 text-xs font-semibold text-slate-900 bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:border-indigo-600 outline-hidden cursor-pointer"
-              >
-                <option value="">-- Select Organisation Name --</option>
-                {uniqueBanks.map((bank) => (
-                  <option key={bank} value={bank}>
-                    {bank}
-                  </option>
-                ))}
-                <option value="__NEW__">+ Add New Organisation</option>
-              </select>
-
-              {bankName === '__NEW__' && (
-                <input
-                  id="user-custom-bank-input"
-                  type="text"
-                  required
-                  value={customBank}
-                  onChange={(e) => setCustomBank(e.target.value)}
-                  placeholder="Enter Bank or NBFC Name (e.g. HDFC Bank, Bajaj Finance)"
-                  className="w-full mt-1.5 px-3.5 py-2.5 text-xs font-semibold text-slate-900 bg-white border border-indigo-400 rounded-xl focus:ring-2 focus:ring-indigo-100 outline-hidden"
-                />
-              )}
-            </div>
-
-            {/* Category 4: Identification Details */}
-            <div className="space-y-1.5 pt-2 border-t border-slate-100">
-              <div className="flex items-center gap-1.5 text-slate-900 font-bold uppercase tracking-wider text-[11px]">
-                <FileText className="w-3.5 h-3.5 text-indigo-600" />
-                <span>Identification Details</span>
-              </div>
-              <input
-                id="user-details-input"
-                type="text"
-                value={details}
-                onChange={(e) => setDetails(e.target.value)}
-                placeholder="e.g. Personal Loan Application, Discrepant KYC Record, Fraud Alert"
-                className="w-full px-3.5 py-2.5 text-xs font-medium text-slate-900 bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:border-indigo-600 outline-hidden"
-              />
-            </div>
-
-            {/* Category 5: Verification / Source Details */}
-            <div className="space-y-1.5 pt-2 border-t border-slate-100">
-              <div className="flex items-center gap-1.5 text-slate-900 font-bold uppercase tracking-wider text-[11px]">
-                <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
-                <span>Verification / Source Details</span>
-              </div>
-              <input
-                id="user-source-input"
-                type="text"
-                value={source}
-                onChange={(e) => setSource(e.target.value)}
-                placeholder="e.g. Credit Bureau Report, Field RCU Verification, Internal Audit"
-                className="w-full px-3.5 py-2.5 text-xs font-medium text-slate-900 bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:border-indigo-600 outline-hidden"
-              />
-            </div>
+            )}
 
             {/* Modal Actions */}
             <div className="pt-4 border-t border-slate-200 flex items-center justify-end gap-3">

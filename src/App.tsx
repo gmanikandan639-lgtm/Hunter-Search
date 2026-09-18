@@ -93,48 +93,42 @@ export default function App() {
 
   // Listen to Firebase Authentication state
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
         setGoogleUser(user);
-        try {
-          const { isAdmin, role, name } = await syncUserProfileInFirestore(user);
-          if (isAdmin || user.email === 'gmanikandan639@gmail.com') {
-            setAdminSession({
-              isAuthenticated: true,
-              username: user.email || 'Admin',
-              name: name || user.displayName || 'Manikandan',
-              role: 'Administrator',
-              system: 'Hunter Risk Management',
-              loginTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-              token: user.uid,
-            });
-            seedLiveIdentifiersIfEmpty().catch(() => {});
-            seedDefaultHunterRecordsIfEmpty().catch(() => {});
-            setActivePage((prev) => (prev === 'login' ? 'admin' : prev));
-          } else {
-            setAdminSession(null);
-            setActivePage((prev) => (prev === 'login' || prev === 'admin' ? 'search' : prev));
-          }
-        } catch (e) {
-          console.warn('Profile sync error:', e);
-          if (user.email === 'gmanikandan639@gmail.com') {
-            setAdminSession({
-              isAuthenticated: true,
-              username: user.email,
-              name: user.displayName || 'Manikandan',
-              role: 'Administrator',
-              system: 'Hunter Risk Management',
-              loginTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-              token: user.uid,
-            });
-          }
-        }
+        setIsAuthChecking(false);
+        // Show Home page (search) immediately upon authentication confirmation
+        setActivePage((prev) => (prev === 'login' ? 'search' : prev));
+
+        // Load Firestore profile asynchronously without blocking initial page display
+        syncUserProfileInFirestore(user)
+          .then(({ isAdmin, role, name }) => {
+            if (role === 'admin' || isAdmin) {
+              setAdminSession({
+                isAuthenticated: true,
+                username: user.email || 'Admin',
+                name: name || user.displayName || 'Administrator',
+                role: 'Administrator',
+                system: 'Hunter Risk Management',
+                loginTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                token: user.uid,
+              });
+              seedLiveIdentifiersIfEmpty().catch(() => {});
+              seedDefaultHunterRecordsIfEmpty().catch(() => {});
+              setActivePage((prev) => (prev === 'search' || prev === 'login' ? 'admin' : prev));
+            } else {
+              setAdminSession(null);
+            }
+          })
+          .catch((e) => {
+            console.warn('Profile sync notice:', e);
+          });
       } else {
         setGoogleUser(null);
         setAdminSession(null);
         setActivePage('login');
+        setIsAuthChecking(false);
       }
-      setIsAuthChecking(false);
     });
 
     return () => unsubscribe();
@@ -412,71 +406,6 @@ export default function App() {
       uniqueSessions: 1421,
     };
   });
-
-  // Track & Register Unique Visitor once per user
-  useEffect(() => {
-    let isMounted = true;
-
-    const recordVisitorEntry = async () => {
-      const { visitorId, isNew } = getOrCreateVisitorId();
-
-      try {
-        const res = await fetch('/api/visitors/increment', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ visitorId }),
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          if (isMounted && data.totalVisits) {
-            const stats: VisitorStats = {
-              totalVisits: data.totalVisits,
-              todayVisits: data.todayVisits,
-              lastVisit: data.lastVisit || new Date().toISOString(),
-              uniqueSessions: data.uniqueVisitors || data.totalVisits,
-            };
-            setVisitorStats(stats);
-            try {
-              localStorage.setItem('hunter_visitor_stats', JSON.stringify(stats));
-            } catch {
-              // ignore
-            }
-            return;
-          }
-        }
-      } catch {
-        // Offline or backend unavailable - fallback handled below
-      }
-
-      // Offline / Local fallback: Only increment if this is genuinely a fresh, new visitor
-      if (isNew) {
-        setVisitorStats((prev) => {
-          const todayStr = new Date().toISOString().split('T')[0];
-          const prevDate = prev.lastVisit ? prev.lastVisit.split('T')[0] : '';
-          const isNewDay = todayStr !== prevDate;
-          const updated: VisitorStats = {
-            totalVisits: (prev.totalVisits || 1420) + 1,
-            todayVisits: isNewDay ? 1 : (prev.todayVisits || 68) + 1,
-            lastVisit: new Date().toISOString(),
-            uniqueSessions: (prev.totalVisits || 1420) + 1,
-          };
-          try {
-            localStorage.setItem('hunter_visitor_stats', JSON.stringify(updated));
-          } catch {
-            // ignore
-          }
-          return updated;
-        });
-      }
-    };
-
-    recordVisitorEntry();
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
 
   // Sync admin session to sessionStorage
   useEffect(() => {
@@ -1349,14 +1278,31 @@ export default function App() {
       });
     } catch (err: any) {
       console.error('Direct Firestore CSV export error:', err);
+      if (err?.message === 'No live identifier records available for download.') {
+        triggerToast({
+          type: 'error',
+          title: 'Export Failed',
+          message: 'No live identifier records available for download.',
+        });
+        return;
+      }
+
       // Resilient fallback to currently loaded live identifiers if direct query encounters error
       if (liveIdentifiers.length > 0) {
-        downloadLiveIdentifiersAsCSV(liveIdentifiers);
-        triggerToast({
-          type: 'success',
-          title: '✓ Live CSV Export Complete',
-          message: `Downloaded ${liveIdentifiers.length.toLocaleString()} LIVE identifiers from active snapshot.`,
-        });
+        try {
+          downloadLiveIdentifiersAsCSV(liveIdentifiers);
+          triggerToast({
+            type: 'success',
+            title: '✓ Live CSV Export Complete',
+            message: `Downloaded ${liveIdentifiers.length.toLocaleString()} LIVE identifiers from active snapshot.`,
+          });
+        } catch (fallbackErr: any) {
+          triggerToast({
+            type: 'error',
+            title: 'Export Failed',
+            message: fallbackErr?.message || 'Failed to download LIVE identifiers from Cloud Firestore.',
+          });
+        }
       } else {
         triggerToast({
           type: 'error',
@@ -1541,6 +1487,7 @@ export default function App() {
                 isSearching={isSearching}
                 onRemapColumns={handleRemapColumns}
                 adminSession={adminSession}
+                currentUser={googleUser}
                 onOpenAddManualRecord={() => setIsAddManualRecordModalOpen(true)}
                 onOpenUserSubmit={() => handleOpenUserSubmit()}
               />
@@ -1709,6 +1656,7 @@ export default function App() {
         initialRecord={userSubmitInitialRecord}
         mode={userSubmitMode}
         currentUser={googleUser}
+        isAdmin={Boolean(adminSession?.isAuthenticated)}
         liveIdentifiers={liveIdentifiers}
       />
 

@@ -16,10 +16,8 @@ import {
   Building2,
   CheckCircle2,
   AlertTriangle,
-  ChevronRight,
   ShieldCheck,
   FileSearch,
-  Edit3,
 } from 'lucide-react';
 
 interface ResultsPanelProps {
@@ -239,7 +237,7 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
               <table id="hunter-results-table" className="w-full text-left border-collapse text-xs">
                 <thead>
                   <tr className="bg-slate-100/70 border-b border-slate-200 text-[11px] font-bold text-slate-600 uppercase tracking-wider">
-                    <th className="py-3 px-4 w-28">Match Score</th>
+                    <th className="py-3 px-4 w-36">Match Score</th>
                     <th className="py-3 px-4">Identifier</th>
                     <th className="py-3 px-4 bg-indigo-50/40 text-indigo-950 font-extrabold">
                       <div className="flex items-center gap-1.5">
@@ -247,15 +245,11 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
                         <span>Bank Name</span>
                       </div>
                     </th>
-                    <th className="py-3 px-4">Details</th>
-                    <th className="py-3 px-4">Source</th>
-                    <th className="py-3 px-4 text-right w-24">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
                   {filteredResults.map((item, idx) => {
                     const badge = getScoreBadge(item.score);
-                    const sourceText = item.record.source || (item.record.isCsvImport ? 'CSV Reference' : 'Manual Identifier');
 
                     return (
                       <tr
@@ -304,59 +298,6 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
                             <span className="font-bold text-indigo-950 text-xs tracking-tight">
                               {item.record.bankName || 'Unspecified Bank'}
                             </span>
-                          </div>
-                        </td>
-
-                        {/* Visible: Details */}
-                        <td className="py-3.5 px-4 align-top">
-                          <p className="text-slate-700 text-xs line-clamp-2 max-w-[200px]" title={item.record.details || item.record.notes || item.record.name}>
-                            {item.record.details || item.record.notes || item.record.name || '—'}
-                          </p>
-                        </td>
-
-                        {/* Visible: Source */}
-                        <td className="py-3.5 px-4 align-top">
-                          <span
-                            className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold border truncate max-w-[130px] ${
-                              sourceText.includes('Manual') || sourceText === 'manual_identifiers'
-                                ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
-                                : 'bg-slate-100 text-slate-700 border-slate-200'
-                            }`}
-                            title={sourceText}
-                          >
-                            {sourceText}
-                          </span>
-                        </td>
-
-                        {/* Action Details */}
-                        <td className="py-3.5 px-4 align-top text-right">
-                          <div className="flex items-center justify-end gap-1.5">
-                            {onProposeUpdate && (
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onProposeUpdate(item.record);
-                                }}
-                                className="p-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 transition-colors inline-flex items-center gap-1 text-[11px] font-bold cursor-pointer"
-                                title="Suggest corrections or update identifier details"
-                              >
-                                <Edit3 className="w-3 h-3 text-amber-700" />
-                                <span className="hidden xl:inline">Update</span>
-                              </button>
-                            )}
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onSelectRecord(item.record, item.score, item.matchedFields);
-                              }}
-                              className="p-1.5 rounded-lg bg-slate-100 hover:bg-indigo-600 hover:text-white text-slate-600 transition-colors inline-flex items-center gap-1 text-[11px] font-semibold cursor-pointer"
-                              title="View Record Details"
-                            >
-                              <span>Details</span>
-                              <ChevronRight className="w-3 h-3" />
-                            </button>
                           </div>
                         </td>
                       </tr>
