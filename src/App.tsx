@@ -86,7 +86,7 @@ export default function App() {
   const [activePage, setActivePage] = useState<ActiveNavPage>('search');
   const [liveSyncStatus, setLiveSyncStatus] = useState<LiveSyncStatus>('connected');
   const [googleUser, setGoogleUser] = useState<FirebaseUser | null>(null);
-  const [isAuthChecking, setIsAuthChecking] = useState<boolean>(false);
+  const [isAuthChecking, setIsAuthChecking] = useState<boolean>(true);
   const [isFirebaseTestOpen, setIsFirebaseTestOpen] = useState<boolean>(false);
   const [dailyVisitorStats, setDailyVisitorStats] = useState<DailyVisitorStat[]>(SEED_DAILY_STATS);
 
@@ -103,14 +103,13 @@ export default function App() {
     return () => unsubscribeDaily();
   }, []);
 
-  // Listen to Firebase Authentication state (Only Admin requires login)
+  // Listen to Firebase Authentication state (Mandatory for ALL users)
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
         setGoogleUser(user);
-        setIsAuthChecking(false);
 
-        // Load Firestore profile asynchronously without blocking initial page display
+        // Load Firestore profile to verify Admin vs Normal User role
         syncUserProfileInFirestore(user)
           .then(({ isAdmin, role, name }) => {
             if (role === 'admin' || isAdmin) {
@@ -125,18 +124,18 @@ export default function App() {
               });
               seedLiveIdentifiersIfEmpty().catch(() => {});
               seedDefaultHunterRecordsIfEmpty().catch(() => {});
-              setActivePage((prev) => (prev === 'login' ? 'admin' : prev));
             } else {
               setAdminSession(null);
             }
+            setIsAuthChecking(false);
           })
           .catch((e) => {
             console.warn('Profile sync notice:', e);
+            setIsAuthChecking(false);
           });
       } else {
         setGoogleUser(null);
         setAdminSession(null);
-        setActivePage((prev) => (prev === 'admin' ? 'login' : prev));
         setIsAuthChecking(false);
       }
     });
@@ -441,9 +440,17 @@ export default function App() {
 
   // Safe Navigation with Auth Guard for Admin Dashboard & Protected Pages
   const handleNavigatePage = (page: ActiveNavPage) => {
+    if (!googleUser) {
+      return;
+    }
     if (page === 'admin') {
       if (!adminSession?.isAuthenticated) {
-        setActivePage('login');
+        triggerToast({
+          type: 'error',
+          title: 'Access Denied',
+          message: 'Admin Dashboard is restricted to authorized Administrator accounts.',
+        });
+        setActivePage('search');
         return;
       }
     }
@@ -454,11 +461,11 @@ export default function App() {
   const handleLoginSuccess = (session: AdminSession) => {
     setAdminSession(session);
     syncAdminUserRoleInFirestore(true).catch(() => {});
-    setActivePage('admin');
+    setActivePage('search');
     triggerToast({
       type: 'success',
       title: 'Administrator Logged In',
-      message: `Welcome, ${session.name}. Hunter Admin Dashboard active.`,
+      message: `Welcome, ${session.name}. Hunter Verification active.`,
       subtext: `Session: ${session.username} • ${session.system}`,
     });
   };
@@ -484,7 +491,6 @@ export default function App() {
     }
     setGoogleUser(null);
     setAdminSession(null);
-    setActivePage('login');
     setSearchQuery('');
     setResults([]);
     setHasSearched(false);
@@ -1355,6 +1361,39 @@ export default function App() {
     }
   };
 
+  // Guard 1: Session Verification on Load
+  if (isAuthChecking) {
+    return (
+      <div id="auth-loading-screen" className="min-h-screen bg-slate-100 flex flex-col items-center justify-center p-4">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-14 h-14 rounded-2xl bg-slate-950 border border-slate-800 p-1 flex items-center justify-center shadow-md animate-pulse">
+            <img src={BRAND.shieldIcon} alt="Fraud Risk Hub" className="w-full h-full object-cover rounded-xl" referrerPolicy="no-referrer" />
+          </div>
+          <div className="w-5 h-5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+          <p className="text-xs font-bold text-slate-600">Verifying session...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Guard 2: Mandatory Authentication for ALL users
+  if (!googleUser) {
+    return (
+      <div
+        id="app-root"
+        className="min-h-screen bg-slate-100/70 text-slate-900 flex flex-col font-sans selection:bg-indigo-600 selection:text-white"
+      >
+        <main id="auth-main-container" className="flex-1 flex items-center justify-center p-4 sm:p-6">
+          <AdminLogin
+            onLoginSuccess={handleLoginSuccess}
+            onUserLoginSuccess={handleUserLoginSuccess}
+          />
+        </main>
+        <ToastNotification toast={toast} onDismiss={() => setToast(null)} />
+      </div>
+    );
+  }
+
   return (
     <div
       id="app-root"
@@ -1437,14 +1476,20 @@ export default function App() {
           />
         )}
 
-        {/* VIEW 3: ADMIN LOGIN PAGE */}
+        {/* VIEW 3: LOGIN REDIRECT FOR AUTHENTICATED USERS */}
         {activePage === 'login' && (
-          <div className="max-w-xl mx-auto py-8">
-            <AdminLogin
-              onLoginSuccess={handleLoginSuccess}
-              onUserLoginSuccess={handleUserLoginSuccess}
-              onCancel={() => setActivePage('search')}
-            />
+          <div className="max-w-md mx-auto py-16 text-center space-y-4 bg-white rounded-2xl border border-slate-200 p-8 shadow-xs">
+            <h3 className="text-base font-bold text-slate-900">Already Authenticated</h3>
+            <p className="text-xs text-slate-500">
+              You are currently signed in as {googleUser?.displayName || googleUser?.email}.
+            </p>
+            <button
+              type="button"
+              onClick={() => setActivePage('search')}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-xs cursor-pointer transition-colors"
+            >
+              Go to Hunter Search
+            </button>
           </div>
         )}
 
@@ -1483,12 +1528,21 @@ export default function App() {
               lastSnapshotTimestamp={lastSnapshotTimestamp}
             />
           ) : (
-            <div className="max-w-xl mx-auto py-8">
-              <AdminLogin
-                onLoginSuccess={handleLoginSuccess}
-                onUserLoginSuccess={handleUserLoginSuccess}
-                onCancel={() => setActivePage('search')}
-              />
+            <div className="max-w-md mx-auto py-16 text-center space-y-4 bg-white rounded-2xl border border-slate-200 p-8 shadow-xs">
+              <div className="w-12 h-12 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-center mx-auto text-amber-600">
+                <ShieldAlert className="w-6 h-6" />
+              </div>
+              <h3 className="text-base font-bold text-slate-900">Administrator Privileges Required</h3>
+              <p className="text-xs text-slate-500">
+                Your account ({googleUser?.email}) is logged in with standard user permissions. The Admin Dashboard is restricted to administrators.
+              </p>
+              <button
+                type="button"
+                onClick={() => setActivePage('search')}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-xs cursor-pointer transition-colors"
+              >
+                Return to Hunter Search
+              </button>
             </div>
           )
         )}

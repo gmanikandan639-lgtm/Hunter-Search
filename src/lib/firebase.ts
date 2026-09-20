@@ -344,16 +344,24 @@ export const syncUserProfileInFirestore = async (
       const existingRole = data.role === 'admin' ? 'admin' : 'user';
       const userName = overrideName || user.displayName || data.name || user.email?.split('@')[0] || 'User';
 
+      const authProvider =
+        user.providerData?.[0]?.providerId ||
+        (user.email?.endsWith('@gmail.com') ? 'google.com' : 'password');
+
       // Update non-role profile fields
       await setDoc(
         userDocRef,
         {
           uid: user.uid,
           name: userName,
+          full_name: userName,
           displayName: userName,
           email: user.email || data.email || '',
           photoURL: user.photoURL || data.photoURL || '',
+          auth_provider: authProvider,
+          provider: authProvider,
           updatedAt: serverTimestamp(),
+          updated_at: serverTimestamp(),
           lastLogin: now,
         },
         { merge: true }
@@ -373,16 +381,24 @@ export const syncUserProfileInFirestore = async (
         user.email === ADMIN_FIREBASE_EMAIL || user.email?.toLowerCase() === 'gmanikandan639@gmail.com';
       const defaultRole = isAdminAccount ? 'admin' : 'user';
       const userName = overrideName || user.displayName || user.email?.split('@')[0] || 'User';
+      const authProvider =
+        user.providerData?.[0]?.providerId ||
+        (user.email?.endsWith('@gmail.com') ? 'google.com' : 'password');
 
       await setDoc(userDocRef, {
         uid: user.uid,
         name: userName,
+        full_name: userName,
         displayName: userName,
         email: user.email || '',
         photoURL: user.photoURL || '',
+        auth_provider: authProvider,
+        provider: authProvider,
         role: defaultRole,
         createdAt: serverTimestamp(),
+        created_at: serverTimestamp(),
         updatedAt: serverTimestamp(),
+        updated_at: serverTimestamp(),
         lastLogin: now,
       });
 

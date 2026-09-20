@@ -314,20 +314,7 @@ export const Header: React.FC<HeaderProps> = ({
                 <span className="w-2 h-2 rounded-full bg-amber-400"></span>
               )}
             </button>
-          ) : (
-            <button
-              id="mobile-nav-login"
-              onClick={() => onSelectPage('admin')}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap ${
-                activePage === 'login'
-                  ? 'bg-indigo-50 text-indigo-700 font-bold'
-                  : 'text-slate-600'
-              }`}
-            >
-              <Lock className="w-3.5 h-3.5" />
-              <span>Admin</span>
-            </button>
-          )}
+          ) : null}
           {(googleUser || adminSession?.isAuthenticated) && onOpenProfile && (
             <button
               id="mobile-nav-profile"
