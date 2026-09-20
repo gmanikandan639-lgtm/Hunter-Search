@@ -38,12 +38,13 @@ service cloud.firestore {
 
     // 3. users Collection (Role-Based Access Control)
     // Public unauthenticated access: DENIED.
-    // Authenticated user can read their own profile; Admin can read all.
+    // Authenticated user can read their own profile (get); Admin can read/list all users.
     // Authenticated user can create their initial profile as 'user' (never 'admin'); Admin can create any.
     // Authenticated user can update their profile fields, but CANNOT modify 'role'; Admin can update any.
     // Only Admin can delete users.
     match /users/{userId} {
-      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow get: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin();
       allow create: if isAuthenticated() && (
         (request.auth.uid == userId && (!('role' in request.resource.data) || request.resource.data.role == 'user')) ||
         isAdmin()

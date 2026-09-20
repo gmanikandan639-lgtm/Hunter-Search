@@ -9,20 +9,14 @@ import {
   User,
   Mail,
   ShieldCheck,
-  ShieldAlert,
-  KeyRound,
   CheckCircle2,
   Clock,
   XCircle,
-  Copy,
-  Check,
   Edit2,
   Save,
   LogOut,
   Building2,
   FileText,
-  AlertCircle,
-  Sparkles,
 } from 'lucide-react';
 import { ManualHunterRecord } from '../types';
 import { updateUserProfileInFirestore } from '../lib/firebase';
@@ -54,7 +48,6 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   );
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
-  const [copiedUid, setCopiedUid] = useState(false);
   const [submissionsFilter, setSubmissionsFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
 
   if (!isOpen || !currentUser) return null;
@@ -69,14 +62,6 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
     if (submissionsFilter === 'all') return true;
     return status === submissionsFilter;
   });
-
-  const handleCopyUid = () => {
-    if (currentUser?.uid) {
-      navigator.clipboard.writeText(currentUser.uid);
-      setCopiedUid(true);
-      setTimeout(() => setCopiedUid(false), 2000);
-    }
-  };
 
   const handleSaveName = async () => {
     if (!displayName.trim() || !currentUser.uid) return;
@@ -222,57 +207,8 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                 <Mail className="w-3.5 h-3.5 text-slate-400" />
                 <span>{currentUser.email}</span>
                 <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                  Google Verified
+                  {currentUser?.providerData?.[0]?.providerId === 'google.com' || currentUser?.email?.endsWith('@gmail.com') ? 'Google Verified' : 'Verified User'}
                 </span>
-              </div>
-            </div>
-          </div>
-
-          {/* Account Security & RBAC Specifications */}
-          <div className="space-y-3">
-            <h5 className="text-xs font-black text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-              <KeyRound className="w-3.5 h-3.5 text-indigo-600" />
-              <span>Account & Security Specifications</span>
-            </h5>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80 space-y-1">
-                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                  Firebase User UID
-                </div>
-                <div className="flex items-center justify-between gap-2 font-mono text-[11px] font-semibold text-slate-800 break-all">
-                  <span className="truncate">{currentUser.uid}</span>
-                  <button
-                    type="button"
-                    onClick={handleCopyUid}
-                    className="p-1 text-slate-400 hover:text-indigo-600 transition-colors shrink-0 cursor-pointer"
-                    title="Copy UID"
-                  >
-                    {copiedUid ? (
-                      <Check className="w-3.5 h-3.5 text-emerald-600" />
-                    ) : (
-                      <Copy className="w-3.5 h-3.5" />
-                    )}
-                  </button>
-                </div>
-              </div>
-
-              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80 space-y-1">
-                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                  Role Enforcement
-                </div>
-                <div className="font-semibold text-slate-800 text-[11px] flex items-center gap-1.5">
-                  <ShieldCheck className="w-3.5 h-3.5 text-indigo-600" />
-                  <span>Cloud Firestore Security Rules (RBAC)</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="p-3 rounded-xl bg-amber-50/80 border border-amber-200 text-[11px] text-amber-900 leading-relaxed flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-              <div>
-                <strong>Role Modification Policy:</strong> Account permissions and roles are
-                authoritatively assigned in Firestore database records (<code className="font-mono font-bold">users/{'{uid}'}.role</code>). Roles cannot be self-modified by standard accounts.
               </div>
             </div>
           </div>

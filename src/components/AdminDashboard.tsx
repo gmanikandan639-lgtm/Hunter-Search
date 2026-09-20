@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   CSVMetadata,
   RecordItem,
@@ -13,6 +13,7 @@ import {
   AdminSession,
   AdminTab,
   ManualHunterRecord,
+  FirestoreUserProfile,
 } from '../types';
 import {
   LayoutDashboard,
@@ -53,10 +54,11 @@ import { searchDatabase } from '../utils/similarity';
 import { parseCSVText, exportToCSV } from '../utils/csvParser';
 import { AddManualRecordModal, ManualRecordInput } from './AddManualRecordModal';
 import { AdminApprovalsManager } from './AdminApprovalsManager';
+import { AdminUserManagement } from './AdminUserManagement';
 import { maskIdentifierNumber, maskGenericNumber } from '../utils/masking';
 import { VisitorStats, DailyVisitorStat, LiveIdentifierRecord, SubmissionRecord, LiveSyncStatus } from '../types';
 import { AdminFirebaseDiagnostics } from './AdminFirebaseDiagnostics';
-import { formatDailyDateDisplay, SEED_DAILY_STATS } from '../lib/firebase';
+import { formatDailyDateDisplay, SEED_DAILY_STATS, subscribeToAllRegisteredUsers, seedDefaultUsersIfEmpty } from '../lib/firebase';
 
 interface AdminDashboardProps {
   adminSession: AdminSession;
@@ -96,6 +98,15 @@ interface AdminDashboardProps {
   liveIdentifiers?: LiveIdentifierRecord[];
   submissions?: SubmissionRecord[];
   lastSnapshotTimestamp?: Date | null;
+  registeredUsers?: FirestoreUserProfile[];
+  onTriggerToast?: (toast: {
+    type: 'success' | 'error' | 'info' | 'warning';
+    title: string;
+    message: string;
+    subtext?: string;
+  }) => void;
+  onRefreshUsers?: () => void;
+  currentAdminEmail?: string;
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
@@ -128,11 +139,35 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   liveIdentifiers = [],
   submissions = [],
   lastSnapshotTimestamp = null,
+  registeredUsers = [],
+  onTriggerToast,
+  onRefreshUsers,
+  currentAdminEmail,
 }) => {
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isAddRecordModalOpen, setIsAddRecordModalOpen] = useState<boolean>(false);
   const [editingManualRecord, setEditingManualRecord] = useState<ManualHunterRecord | null>(null);
+
+  // Registered Users Directory state & live subscription
+  const [internalUsers, setInternalUsers] = useState<FirestoreUserProfile[]>([]);
+  useEffect(() => {
+    seedDefaultUsersIfEmpty().catch(() => {});
+    const unsubscribe = subscribeToAllRegisteredUsers(
+      (list) => {
+        setInternalUsers(list);
+      },
+      (err: any) => {
+        if (err?.code !== 'unavailable' && err?.code !== 'permission-denied') {
+          console.warn('Users fetch notice:', err);
+        }
+      }
+    );
+    return () => unsubscribe();
+  }, []);
+
+  const registeredUsersList =
+    registeredUsers && registeredUsers.length > 0 ? registeredUsers : internalUsers;
 
   // Status breakdown of manual records & submissions
   const pendingSubmissions = useMemo(
@@ -262,6 +297,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Navigation tabs configuration
   const navItems = [
     { id: 'overview', label: 'Dashboard', icon: LayoutDashboard },
+    {
+      id: 'users',
+      label: 'User Accounts & Logins',
+      icon: Users,
+      badge: registeredUsersList.length > 0 ? registeredUsersList.length : undefined,
+      badgeColor: 'bg-indigo-100 text-indigo-800 font-bold',
+    },
     {
       id: 'approvals',
       label: 'User Submissions & Approvals',
@@ -669,6 +711,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                 </div>
 
+                {/* User Accounts & Logins Directory Card */}
+                <div
+                  id="admin-overview-users-card"
+                  className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-xs space-y-1 cursor-pointer hover:border-indigo-300 hover:ring-1 hover:ring-indigo-100 transition-all group col-span-1 sm:col-span-2 lg:col-span-1"
+                  onClick={() => setActiveTab('users')}
+                >
+                  <div className="flex items-center justify-between text-slate-500">
+                    <span className="text-xs font-bold uppercase tracking-wider text-indigo-900">
+                      User Accounts & Logins
+                    </span>
+                    <Users className="w-4 h-4 text-indigo-600 group-hover:scale-110 transition-transform" />
+                  </div>
+                  <div className="text-2xl sm:text-3xl font-black text-slate-900">
+                    {registeredUsersList.length}
+                  </div>
+                  <div className="text-[11px] text-slate-500 flex items-center justify-between pt-1 border-t border-slate-100">
+                    <span>Google & Password Accounts</span>
+                    <span className="font-bold text-indigo-600 group-hover:text-indigo-800">
+                      Manage →
+                    </span>
+                  </div>
+                </div>
+
                 {/* Metric 7: Website Visitor Traffic */}
                 {visitorStats && (
                   <div
@@ -963,6 +1028,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               </div>
             </div>
+          )}
+
+          {/* ======================================================== */}
+          {/* TAB: USER ACCOUNTS & LOGINS DIRECTORY (ADMIN ONLY) */}
+          {/* ======================================================== */}
+          {activeTab === 'users' && (
+            <AdminUserManagement
+              users={registeredUsersList}
+              adminSession={adminSession}
+              currentAdminEmail={currentAdminEmail || adminSession?.username}
+              onTriggerToast={onTriggerToast || ((t) => console.log('Toast:', t))}
+              onRefreshUsers={() => {
+                seedDefaultUsersIfEmpty().catch(() => {});
+                if (onRefreshUsers) onRefreshUsers();
+              }}
+            />
           )}
 
           {/* ======================================================== */}

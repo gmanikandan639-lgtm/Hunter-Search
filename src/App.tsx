@@ -1526,6 +1526,8 @@ export default function App() {
               liveIdentifiers={liveIdentifiers}
               submissions={submissionsList}
               lastSnapshotTimestamp={lastSnapshotTimestamp}
+              onTriggerToast={triggerToast}
+              currentAdminEmail={googleUser?.email || adminSession?.username}
             />
           ) : (
             <div className="max-w-md mx-auto py-16 text-center space-y-4 bg-white rounded-2xl border border-slate-200 p-8 shadow-xs">

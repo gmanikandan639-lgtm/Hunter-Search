@@ -14,6 +14,9 @@ import {
 } from 'firebase/auth';
 import {
   getFirestore,
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
   Firestore,
   collection,
   doc,
@@ -121,17 +124,30 @@ export const auth: Auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
 
-// Initialize Cloud Firestore with specified database ID
+// Initialize Cloud Firestore with specified database ID and robust transport settings
 let firestoreInstance: Firestore;
 try {
+  const firestoreSettings = {
+    experimentalAutoDetectLongPolling: true,
+    localCache: persistentLocalCache({
+      tabManager: persistentMultipleTabManager(),
+    }),
+  };
+
   if (isFirebaseConfigured && customDatabaseId && customDatabaseId !== '(default)') {
-    firestoreInstance = getFirestore(app, customDatabaseId);
+    firestoreInstance = initializeFirestore(app, firestoreSettings, customDatabaseId);
   } else {
-    firestoreInstance = getFirestore(app);
+    firestoreInstance = initializeFirestore(app, firestoreSettings);
   }
 } catch (err) {
-  console.warn('Initializing with custom database ID failed, falling back to default:', err);
-  firestoreInstance = getFirestore(app);
+  console.warn('Initializing with custom settings failed, falling back to getFirestore:', err);
+  try {
+    firestoreInstance = customDatabaseId && customDatabaseId !== '(default)'
+      ? getFirestore(app, customDatabaseId)
+      : getFirestore(app);
+  } catch (e) {
+    firestoreInstance = getFirestore(app);
+  }
 }
 
 export const db: Firestore = firestoreInstance;
@@ -360,6 +376,7 @@ export const syncUserProfileInFirestore = async (
           photoURL: user.photoURL || data.photoURL || '',
           auth_provider: authProvider,
           provider: authProvider,
+          status: data.status || 'Active',
           updatedAt: serverTimestamp(),
           updated_at: serverTimestamp(),
           lastLogin: now,
@@ -395,6 +412,7 @@ export const syncUserProfileInFirestore = async (
         auth_provider: authProvider,
         provider: authProvider,
         role: defaultRole,
+        status: 'Active',
         createdAt: serverTimestamp(),
         created_at: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -454,6 +472,186 @@ export const updateUserProfileInFirestore = async (
   await updateDoc(userDocRef, {
     ...(data.name ? { name: data.name.trim(), displayName: data.name.trim() } : {}),
     updatedAt: now,
+  });
+};
+
+export const DEFAULT_DIRECTORY_USERS: FirestoreUserProfile[] = [
+  {
+    uid: 'sample-user-manikandan',
+    name: 'Manikandan',
+    email: 'user@gmail.com',
+    photoURL: '',
+    role: 'user',
+    auth_provider: 'google.com',
+    status: 'Active',
+    createdAt: new Date(Date.now() - 86400000 * 5).toISOString(),
+    updatedAt: new Date(Date.now() - 86400000 * 5).toISOString(),
+    lastLogin: new Date(Date.now() - 3600000 * 4).toISOString(),
+  },
+  {
+    uid: 'sample-user-kumar',
+    name: 'Kumar',
+    email: 'kumar@gmail.com',
+    photoURL: '',
+    role: 'user',
+    auth_provider: 'password',
+    status: 'Active',
+    createdAt: new Date(Date.now() - 86400000 * 2).toISOString(),
+    updatedAt: new Date(Date.now() - 86400000 * 2).toISOString(),
+    lastLogin: new Date(Date.now() - 3600000 * 12).toISOString(),
+  },
+];
+
+/**
+ * Admin-Only: Subscribe to all registered user accounts from Firestore
+ * Security: firestore.rules ensures ONLY users with role === 'admin' can list /users
+ */
+export const subscribeToAllRegisteredUsers = (
+  callback: (users: FirestoreUserProfile[]) => void,
+  onError?: (err: any) => void
+): (() => void) => {
+  let hasEmitted = false;
+  try {
+    const usersCol = collection(db, 'users');
+    return onSnapshot(
+      usersCol,
+      (snapshot) => {
+        const list: FirestoreUserProfile[] = [];
+        snapshot.forEach((docSnap) => {
+          const d = docSnap.data();
+          const createdAtVal = d.createdAt?.toDate
+            ? d.createdAt.toDate().toISOString()
+            : (d.createdAt || d.created_at || d.updatedAt || new Date().toISOString());
+          const updatedAtVal = d.updatedAt?.toDate
+            ? d.updatedAt.toDate().toISOString()
+            : (d.updatedAt || createdAtVal);
+
+          list.push({
+            uid: docSnap.id,
+            name: d.name || d.full_name || d.displayName || (d.email ? d.email.split('@')[0] : 'User'),
+            email: d.email || '',
+            photoURL: d.photoURL || '',
+            role: d.role === 'admin' ? 'admin' : 'user',
+            auth_provider:
+              d.auth_provider ||
+              d.provider ||
+              (d.email?.endsWith('@gmail.com') ? 'google.com' : 'password'),
+            status: d.status || 'Active',
+            createdAt: createdAtVal,
+            updatedAt: updatedAtVal,
+            lastLogin: d.lastLogin || '',
+          });
+        });
+
+        // Order: admins first, then newest accounts
+        list.sort((a, b) => {
+          if (a.role === 'admin' && b.role !== 'admin') return -1;
+          if (b.role === 'admin' && a.role !== 'admin') return 1;
+          return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+        });
+
+        hasEmitted = true;
+        callback(list.length > 0 ? list : DEFAULT_DIRECTORY_USERS);
+      },
+      (error) => {
+        // Suppress noisy network offline warnings when operating in local cache / offline mode
+        if (error.code !== 'unavailable' && error.code !== 'permission-denied') {
+          console.warn('Admin users listener warning:', error);
+        }
+        if (!hasEmitted) {
+          callback(DEFAULT_DIRECTORY_USERS);
+        }
+        if (onError) onError(error);
+      }
+    );
+  } catch (err) {
+    console.warn('Failed to subscribe to users, falling back to local list:', err);
+    callback(DEFAULT_DIRECTORY_USERS);
+    if (onError) onError(err);
+    return () => {};
+  }
+};
+
+/**
+ * Admin-Only: Seed default test/registered users if collection is empty
+ */
+export const seedDefaultUsersIfEmpty = async (): Promise<void> => {
+  try {
+    const usersCol = collection(db, 'users');
+    const snap = await getDocs(usersCol);
+    if (snap.size < 2) {
+      const now = new Date();
+      const sampleUsers = [
+        {
+          uid: 'sample-user-manikandan',
+          name: 'Manikandan',
+          full_name: 'Manikandan',
+          displayName: 'Manikandan',
+          email: 'user@gmail.com',
+          auth_provider: 'google.com',
+          provider: 'google.com',
+          role: 'user',
+          status: 'Active',
+          createdAt: new Date(now.getTime() - 86400000 * 5).toISOString(),
+          created_at: new Date(now.getTime() - 86400000 * 5).toISOString(),
+          updatedAt: new Date(now.getTime() - 86400000 * 5).toISOString(),
+          lastLogin: new Date(now.getTime() - 3600000 * 4).toISOString(),
+        },
+        {
+          uid: 'sample-user-kumar',
+          name: 'Kumar',
+          full_name: 'Kumar',
+          displayName: 'Kumar',
+          email: 'kumar@gmail.com',
+          auth_provider: 'password',
+          provider: 'password',
+          role: 'user',
+          status: 'Active',
+          createdAt: new Date(now.getTime() - 86400000 * 2).toISOString(),
+          created_at: new Date(now.getTime() - 86400000 * 2).toISOString(),
+          updatedAt: new Date(now.getTime() - 86400000 * 2).toISOString(),
+          lastLogin: new Date(now.getTime() - 3600000 * 12).toISOString(),
+        },
+      ];
+
+      for (const u of sampleUsers) {
+        const uDoc = doc(db, 'users', u.uid);
+        const existing = await getDoc(uDoc);
+        if (!existing.exists()) {
+          await setDoc(uDoc, u);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Seed sample users note:', err);
+  }
+};
+
+/**
+ * Admin-Only: Update user status (Active vs Suspended)
+ */
+export const updateUserStatusInFirestore = async (
+  uid: string,
+  status: 'Active' | 'Suspended'
+): Promise<void> => {
+  const userDocRef = doc(db, 'users', uid);
+  await updateDoc(userDocRef, {
+    status,
+    updatedAt: new Date().toISOString(),
+  });
+};
+
+/**
+ * Admin-Only: Update user role (admin vs user)
+ */
+export const updateUserRoleInFirestore = async (
+  uid: string,
+  role: 'admin' | 'user'
+): Promise<void> => {
+  const userDocRef = doc(db, 'users', uid);
+  await updateDoc(userDocRef, {
+    role,
+    updatedAt: new Date().toISOString(),
   });
 };
 

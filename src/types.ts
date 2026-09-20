@@ -94,6 +94,7 @@ export type ApprovalStatus = 'approved' | 'pending' | 'rejected';
 
 export type AdminTab =
   | 'overview'
+  | 'users'
   | 'approvals'
   | 'manual-records'
   | 'csv-management'
@@ -201,10 +202,14 @@ export interface FirestoreUserProfile {
   uid: string;
   name: string;
   email: string;
-  photoURL: string;
-  role: 'admin' | 'user';
-  createdAt: string;
-  updatedAt: string;
+  photoURL?: string;
+  role: 'admin' | 'user' | string;
+  auth_provider?: string;
+  provider?: string;
+  status?: 'Active' | 'Suspended' | 'Inactive' | string;
+  createdAt?: any;
+  updatedAt?: any;
+  lastLogin?: string;
 }
 
 /**
