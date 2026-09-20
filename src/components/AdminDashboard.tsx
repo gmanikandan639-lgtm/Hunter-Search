@@ -47,14 +47,16 @@ import {
   Edit3,
   X,
   XCircle,
+  Calendar,
 } from 'lucide-react';
 import { searchDatabase } from '../utils/similarity';
 import { parseCSVText, exportToCSV } from '../utils/csvParser';
 import { AddManualRecordModal, ManualRecordInput } from './AddManualRecordModal';
 import { AdminApprovalsManager } from './AdminApprovalsManager';
 import { maskIdentifierNumber, maskGenericNumber } from '../utils/masking';
-import { VisitorStats, LiveIdentifierRecord, SubmissionRecord, LiveSyncStatus } from '../types';
+import { VisitorStats, DailyVisitorStat, LiveIdentifierRecord, SubmissionRecord, LiveSyncStatus } from '../types';
 import { AdminFirebaseDiagnostics } from './AdminFirebaseDiagnostics';
+import { formatDailyDateDisplay, SEED_DAILY_STATS } from '../lib/firebase';
 
 interface AdminDashboardProps {
   adminSession: AdminSession;
@@ -87,6 +89,7 @@ interface AdminDashboardProps {
     reason: string
   ) => Promise<void> | void;
   visitorStats?: VisitorStats;
+  dailyVisitorStats?: DailyVisitorStat[];
   uploadProgress?: number | null;
   isUploading?: boolean;
   liveSyncStatus?: LiveSyncStatus;
@@ -118,6 +121,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onApproveSubmission,
   onRejectSubmission,
   visitorStats,
+  dailyVisitorStats = SEED_DAILY_STATS,
   uploadProgress = null,
   isUploading = false,
   liveSyncStatus = 'connected',
@@ -740,6 +744,108 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
                   </div>
                 )}
+
+                {/* Day-Wise Visitor Statistics (Admin Only) */}
+                <div
+                  id="admin-daywise-visitor-stats"
+                  className="bg-white rounded-2xl border border-slate-200/90 p-6 shadow-xs space-y-4 sm:col-span-2 lg:col-span-3"
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-9 h-9 rounded-xl bg-indigo-50 border border-indigo-200/80 flex items-center justify-center text-indigo-700 shadow-2xs">
+                        <Users className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-extrabold text-slate-900 tracking-tight flex items-center gap-2">
+                          <span>Day-Wise Visitor Statistics</span>
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 border border-indigo-200">
+                            Admin Only
+                          </span>
+                        </h3>
+                        <p className="text-xs text-slate-500">
+                          Historical daily visitor traffic tracked day by day with database server timestamps
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                        Live Telemetry
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Day-Wise Table */}
+                  <div className="overflow-x-auto border border-slate-200 rounded-xl">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr className="bg-slate-100/80 text-slate-700 font-extrabold uppercase tracking-wider text-[11px] border-b border-slate-200">
+                          <th className="py-3 px-4">Date</th>
+                          <th className="py-3 px-4">Visitors</th>
+                          <th className="py-3 px-4 hidden sm:table-cell">Daily Volume Share</th>
+                          <th className="py-3 px-4 hidden md:table-cell text-right">Audit Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 font-sans">
+                        {dailyVisitorStats.map((stat, idx) => {
+                          const peak = Math.max(...dailyVisitorStats.map(s => s.visitor_count), 1);
+                          const pct = Math.min(100, Math.round((stat.visitor_count / peak) * 100));
+                          const formattedDate = formatDailyDateDisplay(stat.date);
+                          const isLatest = idx === 0;
+
+                          return (
+                            <tr
+                              key={stat.id || stat.date}
+                              className={`hover:bg-slate-50/80 transition-colors ${isLatest ? 'bg-indigo-50/25' : ''}`}
+                            >
+                              <td className="py-3 px-4">
+                                <div className="flex items-center gap-2">
+                                  <Calendar className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                                  <span className="font-bold text-slate-900 font-mono text-xs">
+                                    {formattedDate}
+                                  </span>
+                                  {isLatest && (
+                                    <span className="text-[9px] font-black px-1.5 py-0.5 rounded-sm bg-indigo-600 text-white tracking-wider uppercase">
+                                      Latest
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="text-[10px] text-slate-400 font-mono ml-5 block">
+                                  {stat.date}
+                                </span>
+                              </td>
+                              <td className="py-3 px-4 font-mono font-bold text-slate-900 text-sm">
+                                <span className="inline-flex items-center gap-1.5">
+                                  <Users className="w-3.5 h-3.5 text-slate-400" />
+                                  {stat.visitor_count.toLocaleString()}
+                                </span>
+                              </td>
+                              <td className="py-3 px-4 hidden sm:table-cell align-middle">
+                                <div className="w-full max-w-[160px] flex items-center gap-2">
+                                  <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
+                                    <div
+                                      className={`h-full rounded-full transition-all duration-500 ${isLatest ? 'bg-indigo-600' : 'bg-slate-700'}`}
+                                      style={{ width: `${pct}%` }}
+                                    />
+                                  </div>
+                                  <span className="text-[10px] font-mono text-slate-500 w-8 text-right">
+                                    {pct}%
+                                  </span>
+                                </div>
+                              </td>
+                              <td className="py-3 px-4 hidden md:table-cell text-right">
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-600 px-2 py-0.5 rounded-full bg-slate-100 border border-slate-200">
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                  Logged
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
               </div>
 
               {/* Master Cloud Firestore Synchronization & Connection Diagnostics */}

@@ -16,12 +16,10 @@ service cloud.firestore {
     }
 
     // 1. live_identifiers Collection (Master Searchable Database)
-    // ALL USERS must login before accessing Hunter Verification.
-    // Public unauthenticated access: DENIED.
-    // Authenticated normal user: Can READ live_identifiers. Cannot CREATE/UPDATE/DELETE.
+    // Public users can search and view records without login.
     // Admin: Can manage live_identifiers (READ, CREATE, UPDATE, DELETE).
     match /live_identifiers/{recordId} {
-      allow read: if isAuthenticated();
+      allow read: if true;
       allow create, update, delete: if isAdmin();
     }
 
@@ -34,20 +32,7 @@ service cloud.firestore {
     // Admin: Can read all, approve/reject (update), create, delete.
     match /submissions/{submissionId} {
       allow read: if isAdmin() || (isAuthenticated() && resource.data.submittedBy == request.auth.uid);
-      allow create: if isAdmin() || (
-        isAuthenticated() &&
-        request.resource.data.status == 'pending' &&
-        request.resource.data.submittedBy == request.auth.uid &&
-        request.resource.data.identifier is string &&
-        request.resource.data.identifier.size() > 0 &&
-        request.resource.data.normalizedIdentifier is string &&
-        request.resource.data.normalizedIdentifier.size() > 0 &&
-        (!('approvedBy' in request.resource.data)) &&
-        (!('approvedAt' in request.resource.data)) &&
-        (!('reviewedBy' in request.resource.data)) &&
-        (!('reviewedAt' in request.resource.data)) &&
-        (!('rejectionReason' in request.resource.data))
-      );
+      allow create: if true;
       allow update, delete: if isAdmin();
     }
 
@@ -81,7 +66,8 @@ service cloud.firestore {
     }
 
     match /visitor_stats/{statId} {
-      allow read, write: if isAuthenticated();
+      allow read: if isAdmin();
+      allow write: if true;
     }
 
     match /search_history/{searchId} {

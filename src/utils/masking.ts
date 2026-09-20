@@ -4,39 +4,46 @@
  */
 
 /**
- * Masks identifier numbers according to privacy rules:
- * - If identifier is 2 digits/chars: show as '**'
- * - If identifier is 3 digits/chars: show as '***'
- * - If identifier is 4 digits/chars: show as '****'
- * - For longer identifiers (e.g. 2024061800299, REF-9901):
- *   Never show complete number; mask all middle characters so the complete number is never exposed.
- *   e.g. "2024061800212" -> "2024*******12"
+ * Masks identifier numbers according to privacy requirements:
+ * Mask the displayed identifier details after every 6 digits/characters.
+ *
+ * Example 1:
+ * Original: 123456789012345678
+ * Display:  123456******345678
+ *
+ * Example 2:
+ * Original: 123456789012
+ * Display:  123456******
+ *
+ * Chunk 0 (0..6): Unmasked (first 6 characters)
+ * Chunk 1 (6..12): Masked with '*'
+ * Chunk 2 (12..18): Unmasked
+ * Chunk 3 (18..24): Masked with '*'
+ * ... alternating every 6 characters
  */
+export function maskIdentifierEvery6(val: string | number | null | undefined): string {
+  if (val === null || val === undefined) return '';
+  const str = String(val).trim();
+  if (!str) return '';
+
+  let result = '';
+  for (let i = 0; i < str.length; i += 6) {
+    const chunk = str.slice(i, i + 6);
+    const chunkIndex = Math.floor(i / 6);
+    if (chunkIndex % 2 === 0) {
+      result += chunk;
+    } else {
+      result += '*'.repeat(chunk.length);
+    }
+  }
+  return result;
+}
+
 export function maskIdentifierNumber(val: string | number | null | undefined): string {
   if (val === null || val === undefined) return '—';
   const str = String(val).trim();
   if (!str) return '—';
-
-  const len = str.length;
-
-  if (len === 1) return '*';
-  if (len === 2) return '**';
-  if (len === 3) return '***';
-  if (len === 4) return '****';
-
-  if (len === 5) {
-    return `${str[0]}***${str[4]}`;
-  }
-
-  if (len === 6) {
-    return `${str[0]}****${str[5]}`;
-  }
-
-  // 7 or more characters (e.g. 2024061800212, REF-9901)
-  const prefix = str.slice(0, 2);
-  const suffix = str.slice(-2);
-  const maskCount = Math.max(3, len - 4);
-  return `${prefix}${'*'.repeat(maskCount)}${suffix}`;
+  return maskIdentifierEvery6(str);
 }
 
 /**

@@ -116,22 +116,6 @@ export const Header: React.FC<HeaderProps> = ({
 
           {/* Right: Visitor Counter & Admin session info */}
           <div className="flex items-center gap-2.5 sm:gap-3">
-            {/* Live Visitor Counter Badge (24-Hour Active Period Reset) */}
-            {visitorStats && (
-              <div
-                id="header-visitor-counter"
-                className="hidden lg:flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-50 hover:bg-slate-100 border border-slate-200/90 text-xs text-slate-700 transition-colors shadow-2xs"
-                title={`Active 24-Hour Visitors: ${visitorStats.todayVisits.toLocaleString()} | Total All-Time: ${visitorStats.totalVisits.toLocaleString()}`}
-              >
-                <div className="flex items-center gap-1.5">
-                  <Users className="w-3.5 h-3.5 text-indigo-600" />
-                </div>
-                <span className="font-semibold text-[11px] text-slate-600">
-                  Visitors: <strong className="font-mono font-bold text-slate-900">{visitorStats.todayVisits.toLocaleString()}</strong>
-                </span>
-              </div>
-            )}
-
             {/* Admin Session or Admin Login Button */}
             {adminSession?.isAuthenticated ? (
               <div className="flex items-center gap-2">

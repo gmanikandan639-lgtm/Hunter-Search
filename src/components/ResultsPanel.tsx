@@ -27,6 +27,7 @@ interface ResultsPanelProps {
   isSearching: boolean;
   csvMetadata: CSVMetadata;
   threshold: number;
+  isAdmin?: boolean;
   onSelectRecord: (record: RecordItem, score: number, matchedFields: any[]) => void;
   onProposeUpdate?: (record: RecordItem) => void;
 }
@@ -38,6 +39,7 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
   isSearching,
   csvMetadata,
   threshold,
+  isAdmin = false,
   onSelectRecord,
   onProposeUpdate,
 }) => {
@@ -286,7 +288,9 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
                         <td className="py-3.5 px-4 align-top">
                           <div>
                             <p className="font-bold font-mono text-slate-900 text-xs group-hover:text-indigo-700 transition-colors">
-                              {item.record.hunterId || item.record.identifier || item.record.name || item.record.id}
+                              {isAdmin
+                                ? (item.record.hunterId || item.record.identifier || item.record.name || item.record.id)
+                                : maskIdentifierNumber(item.record.hunterId || item.record.identifier || item.record.name || item.record.id)}
                             </p>
                           </div>
                         </td>

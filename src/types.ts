@@ -179,6 +179,14 @@ export interface VisitorStats {
   uniqueSessions?: number;
 }
 
+export interface DailyVisitorStat {
+  id: string;
+  date: string;
+  visitor_count: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export type LiveSyncStatus = 'connected' | 'reconnecting' | 'error' | 'loading';
 
 // ============================================================================

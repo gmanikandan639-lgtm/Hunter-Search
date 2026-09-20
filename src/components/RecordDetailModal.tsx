@@ -22,6 +22,7 @@ interface RecordDetailModalProps {
   record: RecordItem;
   score: number;
   matchedFields: { field: string; value: string; score: number }[];
+  isAdmin?: boolean;
   onClose: () => void;
   onProposeUpdate?: (record: RecordItem) => void;
 }
@@ -30,19 +31,21 @@ export const RecordDetailModal: React.FC<RecordDetailModalProps> = ({
   record,
   score,
   matchedFields,
+  isAdmin = false,
   onClose,
   onProposeUpdate,
 }) => {
   const [copied, setCopied] = useState(false);
 
   const rawIdentifier = record.hunterId || record.name || record.id;
+  const displayIdentifier = isAdmin ? rawIdentifier : maskIdentifierNumber(rawIdentifier);
   const bankName = record.bankName || 'Unspecified Bank';
 
   const handleCopy = () => {
     const report = [
       `HUNTER RECORD DETAILS`,
       `====================`,
-      `Identifier Number: ${rawIdentifier}`,
+      `Identifier Number: ${displayIdentifier}`,
       `Bank Name: ${bankName}`,
       `Match Score: ${score}%`,
     ].join('\n');
@@ -124,7 +127,7 @@ export const RecordDetailModal: React.FC<RecordDetailModalProps> = ({
               </div>
               <div className="text-right sm:text-right">
                 <span className="font-mono font-bold text-slate-900 text-sm break-all">
-                  {rawIdentifier}
+                  {displayIdentifier}
                 </span>
               </div>
             </div>

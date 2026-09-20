@@ -13,6 +13,7 @@ import {
   SearchResultItem,
   SearchHistoryItem,
   VisitorStats,
+  DailyVisitorStat,
   ManualHunterRecord,
   LiveSyncStatus,
 } from './types';
@@ -53,6 +54,8 @@ import {
   subscribeToSearchHistory,
   addSearchHistoryToFirestore,
   subscribeToVisitorStats,
+  subscribeToDailyVisitorStats,
+  SEED_DAILY_STATS,
   incrementVisitorStatsInFirestore,
   subscribeToLiveSyncStatus,
   syncAdminUserRoleInFirestore,
@@ -83,22 +86,29 @@ export default function App() {
   const [activePage, setActivePage] = useState<ActiveNavPage>('search');
   const [liveSyncStatus, setLiveSyncStatus] = useState<LiveSyncStatus>('connected');
   const [googleUser, setGoogleUser] = useState<FirebaseUser | null>(null);
-  const [isAuthChecking, setIsAuthChecking] = useState<boolean>(true);
+  const [isAuthChecking, setIsAuthChecking] = useState<boolean>(false);
   const [isFirebaseTestOpen, setIsFirebaseTestOpen] = useState<boolean>(false);
+  const [dailyVisitorStats, setDailyVisitorStats] = useState<DailyVisitorStat[]>(SEED_DAILY_STATS);
 
   // Admin Session State
   const [adminSession, setAdminSession] = useState<AdminSession | null>(null);
 
   const [isProfileModalOpen, setIsProfileModalOpen] = useState<boolean>(false);
 
-  // Listen to Firebase Authentication state
+  // Subscribe to Day-Wise Visitor Statistics (for Admin Dashboard)
+  useEffect(() => {
+    const unsubscribeDaily = subscribeToDailyVisitorStats((stats) => {
+      setDailyVisitorStats(stats);
+    });
+    return () => unsubscribeDaily();
+  }, []);
+
+  // Listen to Firebase Authentication state (Only Admin requires login)
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
         setGoogleUser(user);
         setIsAuthChecking(false);
-        // Show Home page (search) immediately upon authentication confirmation
-        setActivePage((prev) => (prev === 'login' ? 'search' : prev));
 
         // Load Firestore profile asynchronously without blocking initial page display
         syncUserProfileInFirestore(user)
@@ -115,7 +125,7 @@ export default function App() {
               });
               seedLiveIdentifiersIfEmpty().catch(() => {});
               seedDefaultHunterRecordsIfEmpty().catch(() => {});
-              setActivePage((prev) => (prev === 'search' || prev === 'login' ? 'admin' : prev));
+              setActivePage((prev) => (prev === 'login' ? 'admin' : prev));
             } else {
               setAdminSession(null);
             }
@@ -126,7 +136,7 @@ export default function App() {
       } else {
         setGoogleUser(null);
         setAdminSession(null);
-        setActivePage('login');
+        setActivePage((prev) => (prev === 'admin' ? 'login' : prev));
         setIsAuthChecking(false);
       }
     });
@@ -431,17 +441,9 @@ export default function App() {
 
   // Safe Navigation with Auth Guard for Admin Dashboard & Protected Pages
   const handleNavigatePage = (page: ActiveNavPage) => {
-    if (!googleUser) {
-      setActivePage('login');
-      return;
-    }
     if (page === 'admin') {
       if (!adminSession?.isAuthenticated) {
-        triggerToast({
-          type: 'error',
-          title: 'Access Restricted',
-          message: 'Admin Dashboard is restricted to authorized Administrator accounts.',
-        });
+        setActivePage('login');
         return;
       }
     }
@@ -1353,94 +1355,6 @@ export default function App() {
     }
   };
 
-  // GLOBAL AUTH GUARD 1: Authentication State Verification Loader
-  if (isAuthChecking) {
-    return (
-      <div
-        id="auth-loading-screen"
-        className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 text-white"
-      >
-        <div className="flex flex-col items-center gap-4 animate-in fade-in">
-          <div className="w-16 h-16 rounded-2xl bg-slate-950 border border-slate-800 p-2 shadow-2xl shadow-indigo-950/50 flex items-center justify-center animate-pulse">
-            <img
-              src={BRAND.shieldIcon}
-              alt="Fraud Risk Hub"
-              className="w-full h-full object-cover rounded-xl"
-              referrerPolicy="no-referrer"
-            />
-          </div>
-          <div className="text-center">
-            <h2 className="text-lg font-bold text-white tracking-tight">HUNTER VERIFICATION</h2>
-            <p className="text-xs text-slate-400 mt-1">Verifying authentication session...</p>
-          </div>
-          <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mt-2" />
-        </div>
-      </div>
-    );
-  }
-
-  // GLOBAL AUTH GUARD 2: Force Authentication for all users before any Hunter access
-  if (!googleUser) {
-    return (
-      <div
-        id="app-root"
-        className="min-h-screen bg-slate-100/70 text-slate-900 flex flex-col font-sans selection:bg-indigo-600 selection:text-white"
-      >
-        {/* Unauthenticated Header */}
-        <header
-          id="unauth-header"
-          className="bg-white border-b border-slate-200/90 shadow-xs py-3.5 px-4 sm:px-6"
-        >
-          <div className="max-w-7xl mx-auto flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl overflow-hidden bg-slate-950 border border-slate-800 p-1 flex items-center justify-center shadow-xs">
-                <img
-                  src={BRAND.shieldIcon}
-                  alt="Fraud Risk Hub Logo"
-                  className="w-full h-full object-cover rounded-lg"
-                  referrerPolicy="no-referrer"
-                />
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="text-base font-black tracking-tight text-slate-900">
-                    FRAUD RISK HUB
-                  </span>
-                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-red-50 text-red-700 border border-red-200">
-                    RCU / FCU
-                  </span>
-                </div>
-                <p className="text-[10px] font-bold tracking-wider text-slate-500 uppercase">
-                  Hunter Verification Portal
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200">
-                <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
-                Authentication Required
-              </span>
-            </div>
-          </div>
-        </header>
-
-        {/* Login / Sign-up Screen */}
-        <main
-          id="unauth-main-container"
-          className="flex-1 flex items-center justify-center p-4 sm:p-6"
-        >
-          <AdminLogin
-            onLoginSuccess={handleLoginSuccess}
-            onUserLoginSuccess={handleUserLoginSuccess}
-            onCancel={() => {}}
-          />
-        </main>
-
-        <ToastNotification toast={toast} onDismiss={() => setToast(null)} />
-      </div>
-    );
-  }
-
   return (
     <div
       id="app-root"
@@ -1502,6 +1416,7 @@ export default function App() {
                 isSearching={isSearching}
                 csvMetadata={effectiveMetadata}
                 threshold={filters.threshold}
+                isAdmin={Boolean(adminSession?.isAuthenticated)}
                 onSelectRecord={(record, score, matchedFields) =>
                   setSelectedRecord({ record, score, matchedFields })
                 }
@@ -1524,11 +1439,13 @@ export default function App() {
 
         {/* VIEW 3: ADMIN LOGIN PAGE */}
         {activePage === 'login' && (
-          <AdminLogin
-            onLoginSuccess={handleLoginSuccess}
-            onUserLoginSuccess={handleUserLoginSuccess}
-            onCancel={() => setActivePage('search')}
-          />
+          <div className="max-w-xl mx-auto py-8">
+            <AdminLogin
+              onLoginSuccess={handleLoginSuccess}
+              onUserLoginSuccess={handleUserLoginSuccess}
+              onCancel={() => setActivePage('search')}
+            />
+          </div>
         )}
 
         {/* VIEW 4: ADMIN DASHBOARD (PROTECTED) */}
@@ -1557,6 +1474,7 @@ export default function App() {
               onApproveSubmission={handleApproveSubmission}
               onRejectSubmission={handleRejectSubmission}
               visitorStats={visitorStats}
+              dailyVisitorStats={dailyVisitorStats}
               uploadProgress={uploadProgress}
               isUploading={isUploading}
               liveSyncStatus={liveSyncStatus}
@@ -1565,32 +1483,12 @@ export default function App() {
               lastSnapshotTimestamp={lastSnapshotTimestamp}
             />
           ) : (
-            <div className="text-center py-16 bg-white rounded-2xl border border-slate-200 p-8 shadow-sm max-w-lg mx-auto space-y-4">
-              <div className="w-14 h-14 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center mx-auto shadow-xs">
-                <ShieldAlert className="w-7 h-7 text-amber-600" />
-              </div>
-              <div>
-                <h3 className="text-base font-bold text-slate-900">Administrator Privileges Required</h3>
-                <p className="text-xs text-slate-500 mt-1">
-                  You are signed in as <strong className="text-slate-800">{googleUser?.displayName || googleUser?.email}</strong> with standard user permissions.
-                </p>
-              </div>
-              <div className="flex items-center justify-center gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setActivePage('search')}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-xs transition-colors cursor-pointer"
-                >
-                  Return to Hunter Search
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActivePage('login')}
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-colors cursor-pointer"
-                >
-                  Switch Account
-                </button>
-              </div>
+            <div className="max-w-xl mx-auto py-8">
+              <AdminLogin
+                onLoginSuccess={handleLoginSuccess}
+                onUserLoginSuccess={handleUserLoginSuccess}
+                onCancel={() => setActivePage('search')}
+              />
             </div>
           )
         )}
@@ -1630,6 +1528,7 @@ export default function App() {
           record={selectedRecord.record}
           score={selectedRecord.score}
           matchedFields={selectedRecord.matchedFields}
+          isAdmin={Boolean(adminSession?.isAuthenticated)}
           onClose={() => setSelectedRecord(null)}
           onProposeUpdate={(rec) => handleOpenUserSubmit(rec, 'update')}
         />
