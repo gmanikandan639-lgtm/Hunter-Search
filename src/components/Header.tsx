@@ -111,6 +111,17 @@ export const Header: React.FC<HeaderProps> = ({
                 <Info className="w-3.5 h-3.5" />
                 <span>About Hub</span>
               </button>
+              {onOpenUserSubmit && (
+                <button
+                  id="desktop-nav-contribute"
+                  onClick={onOpenUserSubmit}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-indigo-700 bg-indigo-50/70 hover:bg-indigo-100 hover:text-indigo-900 border border-indigo-200/60 transition-colors cursor-pointer"
+                  title="Contribute Hunter Identifier (No login required)"
+                >
+                  <PlusCircle className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>Contribute</span>
+                </button>
+              )}
             </nav>
           </div>
 
@@ -259,6 +270,16 @@ export const Header: React.FC<HeaderProps> = ({
             ) : (
               <div className="flex items-center gap-2">
                 <button
+                  id="header-user-login-btn"
+                  onClick={() => onSelectPage('login')}
+                  className="flex items-center gap-1.5 py-1.5 px-3 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/80 text-xs font-bold transition-colors cursor-pointer"
+                  title="Sign In or Register an Account"
+                >
+                  <User className="w-3.5 h-3.5 text-indigo-600" />
+                  <span className="hidden sm:inline">Sign In / Register</span>
+                  <span className="sm:hidden">Sign In</span>
+                </button>
+                <button
                   id="header-login-btn"
                   onClick={() => onSelectPage('admin')}
                   className="flex items-center gap-1.5 py-1.5 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 active:bg-slate-950 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer"
@@ -298,6 +319,26 @@ export const Header: React.FC<HeaderProps> = ({
             <Info className="w-3.5 h-3.5" />
             <span>About</span>
           </button>
+          {onOpenUserSubmit && (
+            <button
+              id="mobile-nav-contribute"
+              onClick={onOpenUserSubmit}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap text-indigo-700 bg-indigo-50/80 cursor-pointer"
+            >
+              <PlusCircle className="w-3.5 h-3.5 text-indigo-600" />
+              <span>Contribute</span>
+            </button>
+          )}
+          {!adminSession?.isAuthenticated && !googleUser && (
+            <button
+              id="mobile-nav-user-login"
+              onClick={() => onSelectPage('login')}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap text-slate-700 bg-slate-100 cursor-pointer"
+            >
+              <User className="w-3.5 h-3.5 text-slate-600" />
+              <span>Sign In</span>
+            </button>
+          )}
           {adminSession?.isAuthenticated ? (
             <button
               id="mobile-nav-admin"
