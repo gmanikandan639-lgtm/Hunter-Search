@@ -11,6 +11,8 @@ import {
   signOut as fbSignOut,
   onAuthStateChanged,
   User as FirebaseUser,
+  setPersistence,
+  browserLocalPersistence,
 } from 'firebase/auth';
 import {
   getFirestore,
@@ -121,6 +123,11 @@ export const app: FirebaseApp =
 
 // Initialize Firebase Auth
 export const auth: Auth = getAuth(app);
+if (typeof window !== 'undefined') {
+  setPersistence(auth, browserLocalPersistence).catch((err) => {
+    console.warn('Set auth persistence note:', err);
+  });
+}
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
 
@@ -1221,12 +1228,20 @@ export const submitUserHunterRecordToFirestore = async (
     rawColumns?: Record<string, string>;
   }
 ): Promise<string> => {
+  const currentUser = auth.currentUser;
+  if (!currentUser) {
+    throw new Error('Authentication required. You must be signed in to submit a contribution or update.');
+  }
+
   const docId = `sub-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
   const recordDoc = doc(db, MANUAL_IDENTIFIERS_COLLECTION, docId);
   const fallbackRecordDoc = doc(db, MANUAL_COLLECTION, docId);
   const now = new Date().toISOString();
 
-  const submitterInfo = submission.submittedBy || { name: 'Portal User' };
+  const submitterInfo = submission.submittedBy || {
+    name: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
+    email: currentUser.email || '',
+  };
 
   const payload: ManualHunterRecord = {
     id: docId,
@@ -1242,7 +1257,7 @@ export const submitUserHunterRecordToFirestore = async (
     accountNumber: submission.accountNumber?.trim() || '',
     mobile: submission.mobile?.trim() || '',
     pan: (submission.pan?.trim() || '').toUpperCase(),
-    createdBy: `User: ${submitterInfo.name || 'Anonymous'}`,
+    createdBy: `User: ${currentUser.displayName || submitterInfo.name || 'User'}`,
     createdAt: now,
     updatedAt: now,
     approvalStatus: 'pending',
@@ -1285,7 +1300,7 @@ export const submitUserHunterRecordToFirestore = async (
     const normId = getNormalizedIdentifier(submission.hunterId.trim());
     const subDoc = doc(db, SUBMISSIONS_COLLECTION, docId);
     
-    // Write public submission with required fields for Firestore security rules
+    // Write user submission with required fields for Firestore security rules
     await setDoc(
       subDoc,
       cleanForFirestore({
@@ -1295,16 +1310,16 @@ export const submitUserHunterRecordToFirestore = async (
         normalizedIdentifier: normId,
         bankName: submission.bankName.trim(),
         details: submission.remarks?.trim() || submission.name || 'User submitted identifier',
-        source: 'public_contribution',
+        source: 'user_contribution',
         type: submission.isUpdateRequest ? 'update' : 'new',
         submissionType: submission.isUpdateRequest ? 'update' : 'new',
         targetRecordId: submission.targetRecordId || '',
         existingRecordId: submission.targetRecordId || '',
         status: 'pending',
         submittedAt: serverTimestamp(),
-        submittedBy: auth.currentUser?.uid || 'user',
-        submittedByName: submitterInfo.name || auth.currentUser?.displayName || 'User',
-        submittedByEmail: submitterInfo.email || auth.currentUser?.email || '',
+        submittedBy: currentUser.uid,
+        submittedByName: submitterInfo.name || currentUser.displayName || 'User',
+        submittedByEmail: submitterInfo.email || currentUser.email || '',
         rawColumns: payload.rawColumns || {},
       })
     );

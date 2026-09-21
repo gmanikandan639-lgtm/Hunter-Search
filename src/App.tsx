@@ -83,10 +83,14 @@ export default function App() {
   // Activate client-side deterrent against right-click and common inspection shortcuts
   useBrowserProtection();
 
-  const [activePage, setActivePage] = useState<ActiveNavPage>('search');
+  const [activePage, setActivePage] = useState<ActiveNavPage>('login');
   const [liveSyncStatus, setLiveSyncStatus] = useState<LiveSyncStatus>('connected');
   const [googleUser, setGoogleUser] = useState<FirebaseUser | null>(null);
   const [isAuthChecking, setIsAuthChecking] = useState<boolean>(true);
+  const [pendingAuthAction, setPendingAuthAction] = useState<{
+    type: 'contribute' | 'update';
+    record?: RecordItem | null;
+  } | null>(null);
   const [isFirebaseTestOpen, setIsFirebaseTestOpen] = useState<boolean>(false);
   const [dailyVisitorStats, setDailyVisitorStats] = useState<DailyVisitorStat[]>(SEED_DAILY_STATS);
 
@@ -128,15 +132,19 @@ export default function App() {
               setAdminSession(null);
             }
             setIsAuthChecking(false);
+            // Default to search if on login page
+            setActivePage((prev) => (prev === 'login' ? 'search' : prev));
           })
           .catch((e) => {
             console.warn('Profile sync notice:', e);
             setIsAuthChecking(false);
+            setActivePage((prev) => (prev === 'login' ? 'search' : prev));
           });
       } else {
         setGoogleUser(null);
         setAdminSession(null);
         setIsAuthChecking(false);
+        setActivePage((prev) => (prev === 'about' ? 'about' : 'login'));
       }
     });
 
@@ -438,8 +446,18 @@ export default function App() {
     }, 5000);
   };
 
-  // Safe Navigation with Auth Guard for Admin Dashboard & Protected Pages
+  // Safe Navigation with Auth Guard for All Protected Pages
   const handleNavigatePage = (page: ActiveNavPage) => {
+    if (!googleUser && page !== 'about' && page !== 'login') {
+      triggerToast({
+        type: 'info',
+        title: 'Authentication Required',
+        message: 'Please sign in with Google or Email & Password to access Hunter Search.',
+      });
+      setActivePage('login');
+      return;
+    }
+
     if (page === 'admin') {
       if (!adminSession?.isAuthenticated) {
         if (googleUser) {
@@ -452,7 +470,7 @@ export default function App() {
           return;
         }
         // Unauthenticated visitor navigating to Admin Portal -> show Admin Login
-        setActivePage('admin');
+        setActivePage('login');
         return;
       }
     }
@@ -463,7 +481,24 @@ export default function App() {
   const handleLoginSuccess = (session: AdminSession) => {
     setAdminSession(session);
     syncAdminUserRoleInFirestore(true).catch(() => {});
-    setActivePage('admin');
+
+    // Check if there was a pending contribution or update action
+    if (pendingAuthAction?.type === 'contribute') {
+      setUserSubmitInitialRecord(null);
+      setUserSubmitMode('new');
+      setIsUserSubmitModalOpen(true);
+      setPendingAuthAction(null);
+      setActivePage('search');
+    } else if (pendingAuthAction?.type === 'update') {
+      setUserSubmitInitialRecord(pendingAuthAction.record || null);
+      setUserSubmitMode('update');
+      setIsUserSubmitModalOpen(true);
+      setPendingAuthAction(null);
+      setActivePage('search');
+    } else {
+      setActivePage('admin');
+    }
+
     triggerToast({
       type: 'success',
       title: 'Administrator Logged In',
@@ -476,7 +511,24 @@ export default function App() {
   const handleUserLoginSuccess = (user: any) => {
     setGoogleUser(user);
     setAdminSession(null);
-    setActivePage('search');
+
+    // Check if there was a pending contribution or update action
+    if (pendingAuthAction?.type === 'contribute') {
+      setUserSubmitInitialRecord(null);
+      setUserSubmitMode('new');
+      setIsUserSubmitModalOpen(true);
+      setPendingAuthAction(null);
+      setActivePage('search');
+    } else if (pendingAuthAction?.type === 'update') {
+      setUserSubmitInitialRecord(pendingAuthAction.record || null);
+      setUserSubmitMode('update');
+      setIsUserSubmitModalOpen(true);
+      setPendingAuthAction(null);
+      setActivePage('search');
+    } else {
+      setActivePage('search');
+    }
+
     triggerToast({
       type: 'success',
       title: 'Welcome to Hunter Verification',
@@ -493,15 +545,16 @@ export default function App() {
     }
     setGoogleUser(null);
     setAdminSession(null);
+    setPendingAuthAction(null);
     setSearchQuery('');
     setResults([]);
     setHasSearched(false);
     setSelectedRecord(null);
-    setActivePage('search');
+    setActivePage('login');
     triggerToast({
       type: 'info',
       title: 'Signed Out',
-      message: 'You have been logged out. Hunter Search remains available.',
+      message: 'You have been logged out. Please sign in to access Hunter Verification.',
     });
   };
 
@@ -1063,8 +1116,25 @@ export default function App() {
     });
   };
 
-  // Step 8.1: Handle User Open Submission Modal
+  // Step 8.1: Handle User Open Submission Modal (Requires Authentication)
   const handleOpenUserSubmit = (initialRecord?: RecordItem, mode: 'new' | 'update' = 'new') => {
+    if (!googleUser) {
+      setPendingAuthAction({
+        type: mode === 'update' ? 'update' : 'contribute',
+        record: initialRecord || null,
+      });
+      setIsUserSubmitModalOpen(false);
+      setActivePage('login');
+      triggerToast({
+        type: 'info',
+        title: 'Authentication Required',
+        message: mode === 'update'
+          ? 'Please sign in to propose an update to this identifier. Your record is preserved.'
+          : 'Please sign in to contribute a Hunter Identifier.',
+      });
+      return;
+    }
+
     setUserSubmitInitialRecord(initialRecord || null);
     setUserSubmitMode(mode);
     setIsUserSubmitModalOpen(true);
@@ -1373,6 +1443,46 @@ export default function App() {
     }
   };
 
+  if (isAuthChecking) {
+    return (
+      <div
+        id="auth-checking-screen"
+        className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-6 space-y-4"
+      >
+        <div className="w-14 h-14 rounded-2xl bg-indigo-950/80 border border-indigo-700/60 p-2 flex items-center justify-center shadow-lg shadow-indigo-950/50 animate-pulse">
+          <img
+            src={BRAND.shieldIcon}
+            alt="Fraud Risk Hub"
+            className="w-full h-full object-cover rounded-xl"
+            referrerPolicy="no-referrer"
+          />
+        </div>
+        <div className="text-center space-y-1">
+          <h2 className="text-base font-extrabold tracking-tight text-slate-100">
+            Hunter Verification Hub
+          </h2>
+          <p className="text-xs text-slate-400 font-medium">
+            Verifying secure session...
+          </p>
+        </div>
+        <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  const pendingNotice = pendingAuthAction
+    ? pendingAuthAction.type === 'update'
+      ? {
+          title: 'Authentication Required to Propose Update',
+          description: `Please sign in with Google or Email & Password to propose an update to identifier "${pendingAuthAction.record?.hunterId || 'selected identifier'}". Your record details are preserved.`,
+        }
+      : {
+          title: 'Authentication Required to Contribute',
+          description:
+            'Please sign in with Google or Email & Password to contribute a new Hunter Identifier. You will be redirected right to the contribution form.',
+        }
+    : null;
+
   return (
     <div
       id="app-root"
@@ -1394,92 +1504,95 @@ export default function App() {
         onOpenProfile={() => setIsProfileModalOpen(true)}
       />
 
-
       {/* Main Content Container */}
       <main
         id="main-content-container"
         className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6"
       >
-        {/* VIEW 1: PUBLIC HUNTER SEARCH */}
-        {activePage === 'search' && (
-          <div
-            id="hunter-search-page-layout"
-            className="flex flex-col lg:flex-row items-start gap-6"
-          >
-            {/* LEFT SIDE – 40% (HUNTER SEARCH) */}
-            <div className="w-full lg:w-[40%] shrink-0 lg:sticky lg:top-24">
-              <SearchPanel
-                csvMetadata={effectiveMetadata}
-                uniqueBanks={combinedUniqueBanks}
-                searchQuery={searchQuery}
-                setSearchQuery={setSearchQuery}
-                onExecuteSearch={handleExecuteSearch}
-                filters={filters}
-                setFilters={setFilters}
-                isSearching={isSearching}
-                onRemapColumns={handleRemapColumns}
-                adminSession={adminSession}
-                currentUser={googleUser}
-                onOpenAddManualRecord={() => setIsAddManualRecordModalOpen(true)}
-                onOpenUserSubmit={() => handleOpenUserSubmit()}
-              />
-            </div>
-
-            {/* RIGHT SIDE – 60% (HUNTER MATCH RESULTS) */}
-            <div className="w-full lg:w-[60%] flex-1 min-w-0">
-              <ResultsPanel
-                results={results}
-                hasSearched={hasSearched}
-                searchQuery={searchQuery}
-                isSearching={isSearching}
-                csvMetadata={effectiveMetadata}
-                threshold={filters.threshold}
-                isAdmin={Boolean(adminSession?.isAuthenticated)}
-                onSelectRecord={(record, score, matchedFields) =>
-                  setSelectedRecord({ record, score, matchedFields })
-                }
-                onProposeUpdate={(rec) => handleOpenUserSubmit(rec, 'update')}
-                onOpenUserSubmit={() => handleOpenUserSubmit()}
-              />
-            </div>
+        {/* UNAUTHENTICATED USERS: SHOW LOGIN PAGE (CASE 1 / CASE 3 / CASE 4) */}
+        {!googleUser && activePage !== 'about' ? (
+          <div className="flex justify-center p-2 sm:p-6">
+            <AdminLogin
+              onLoginSuccess={handleLoginSuccess}
+              onUserLoginSuccess={handleUserLoginSuccess}
+              pendingNotice={pendingNotice}
+            />
           </div>
-        )}
-
-        {/* VIEW 2: ABOUT PAGE */}
-        {activePage === 'about' && (
-          <AboutAdminPage
-            csvMetadata={effectiveMetadata}
-            adminSession={adminSession}
-            onNavigateToSearch={() => setActivePage('search')}
-            onNavigateToAdmin={() => handleNavigatePage('admin')}
-            onNavigateToLogin={() => setActivePage('login')}
-          />
-        )}
-
-        {/* VIEW 3: LOGIN / AUTHENTICATION PAGE */}
-        {activePage === 'login' && (
-          googleUser ? (
-            <div className="max-w-md mx-auto py-16 text-center space-y-4 bg-white rounded-2xl border border-slate-200 p-8 shadow-xs">
-              <h3 className="text-base font-bold text-slate-900">Already Authenticated</h3>
-              <p className="text-xs text-slate-500">
-                You are currently signed in as {googleUser?.displayName || googleUser?.email}.
-              </p>
-              <button
-                type="button"
-                onClick={() => setActivePage('search')}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-xs cursor-pointer transition-colors"
+        ) : (
+          <>
+            {/* VIEW 1: PUBLIC HUNTER SEARCH (AVAILABLE AFTER AUTHENTICATION) */}
+            {activePage === 'search' && (
+              <div
+                id="hunter-search-page-layout"
+                className="flex flex-col lg:flex-row items-start gap-6"
               >
-                Go to Hunter Search
-              </button>
-            </div>
-          ) : (
-            <div className="flex justify-center p-4 sm:p-6">
-              <AdminLogin
-                onLoginSuccess={handleLoginSuccess}
-                onUserLoginSuccess={handleUserLoginSuccess}
+                {/* LEFT SIDE – 40% (HUNTER SEARCH) */}
+                <div className="w-full lg:w-[40%] shrink-0 lg:sticky lg:top-24">
+                  <SearchPanel
+                    csvMetadata={effectiveMetadata}
+                    uniqueBanks={combinedUniqueBanks}
+                    searchQuery={searchQuery}
+                    setSearchQuery={setSearchQuery}
+                    onExecuteSearch={handleExecuteSearch}
+                    filters={filters}
+                    setFilters={setFilters}
+                    isSearching={isSearching}
+                    onRemapColumns={handleRemapColumns}
+                    adminSession={adminSession}
+                    currentUser={googleUser}
+                    onOpenAddManualRecord={() => setIsAddManualRecordModalOpen(true)}
+                    onOpenUserSubmit={() => handleOpenUserSubmit()}
+                  />
+                </div>
+
+                {/* RIGHT SIDE – 60% (HUNTER MATCH RESULTS) */}
+                <div className="w-full lg:w-[60%] flex-1 min-w-0">
+                  <ResultsPanel
+                    results={results}
+                    hasSearched={hasSearched}
+                    searchQuery={searchQuery}
+                    isSearching={isSearching}
+                    csvMetadata={effectiveMetadata}
+                    threshold={filters.threshold}
+                    isAdmin={Boolean(adminSession?.isAuthenticated)}
+                    onSelectRecord={(record, score, matchedFields) =>
+                      setSelectedRecord({ record, score, matchedFields })
+                    }
+                    onProposeUpdate={(rec) => handleOpenUserSubmit(rec, 'update')}
+                    onOpenUserSubmit={() => handleOpenUserSubmit()}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* VIEW 2: ABOUT PAGE */}
+            {activePage === 'about' && (
+              <AboutAdminPage
+                csvMetadata={effectiveMetadata}
+                adminSession={adminSession}
+                onNavigateToSearch={() => setActivePage('search')}
+                onNavigateToAdmin={() => handleNavigatePage('admin')}
+                onNavigateToLogin={() => setActivePage('login')}
               />
-            </div>
-          )
+            )}
+
+            {/* VIEW 3: LOGIN / AUTHENTICATION PAGE */}
+            {activePage === 'login' && (
+              <div className="max-w-md mx-auto py-16 text-center space-y-4 bg-white rounded-2xl border border-slate-200 p-8 shadow-xs">
+                <h3 className="text-base font-bold text-slate-900">Already Authenticated</h3>
+                <p className="text-xs text-slate-500">
+                  You are currently signed in as {googleUser?.displayName || googleUser?.email}.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setActivePage('search')}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-xs cursor-pointer transition-colors"
+                >
+                  Go to Hunter Search
+                </button>
+              </div>
+            )}
+          </>
         )}
 
         {/* VIEW 4: ADMIN DASHBOARD (PROTECTED) */}
@@ -1614,6 +1727,22 @@ export default function App() {
         currentUser={googleUser}
         isAdmin={Boolean(adminSession?.isAuthenticated)}
         liveIdentifiers={liveIdentifiers}
+        onRequireLogin={({ initialRecord, mode }) => {
+          setPendingAuthAction({
+            type: mode === 'update' ? 'update' : 'contribute',
+            record: initialRecord || null,
+          });
+          setIsUserSubmitModalOpen(false);
+          setActivePage('login');
+          triggerToast({
+            type: 'info',
+            title: 'Authentication Required',
+            message:
+              mode === 'update'
+                ? 'Please sign in to submit an update proposal. Your record is preserved.'
+                : 'Please sign in to contribute a Hunter Identifier.',
+          });
+        }}
       />
 
       {/* User Account Profile & Role Modal */}

@@ -19,6 +19,7 @@ import {
   ShieldCheck,
   FileSearch,
   PlusCircle,
+  Edit3,
 } from 'lucide-react';
 
 interface ResultsPanelProps {
@@ -275,6 +276,7 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
                         <span>Bank Name</span>
                       </div>
                     </th>
+                    <th className="py-3 px-4 text-right">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
@@ -331,6 +333,23 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
                               {item.record.bankName || 'Unspecified Bank'}
                             </span>
                           </div>
+                        </td>
+
+                        {/* Visible: Action (Update) */}
+                        <td className="py-3.5 px-4 align-top text-right">
+                          <button
+                            id={`row-update-btn-${idx}`}
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (onProposeUpdate) onProposeUpdate(item.record);
+                            }}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-indigo-700 bg-indigo-50 hover:bg-indigo-100 active:bg-indigo-200 border border-indigo-200 text-xs font-bold transition-colors cursor-pointer"
+                            title="Propose update for this identifier"
+                          >
+                            <Edit3 className="w-3 h-3" />
+                            <span>Update</span>
+                          </button>
                         </td>
                       </tr>
                     );

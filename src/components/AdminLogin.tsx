@@ -13,6 +13,7 @@ import {
   EyeOff,
   AlertCircle,
   CheckCircle2,
+  Info,
 } from 'lucide-react';
 import { AdminSession } from '../types';
 import {
@@ -27,6 +28,7 @@ export interface AdminLoginProps {
   onLoginSuccess: (session: AdminSession) => void;
   onUserLoginSuccess?: (user: any) => void;
   onCancel?: () => void;
+  pendingNotice?: { title: string; description: string } | null;
 }
 
 type AuthMode = 'login' | 'signup' | 'forgot';
@@ -35,6 +37,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
   onLoginSuccess,
   onUserLoginSuccess,
   onCancel,
+  pendingNotice,
 }) => {
   const [mode, setMode] = useState<AuthMode>('login');
 
@@ -333,6 +336,20 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
               </p>
             </div>
           </div>
+
+          {/* Pending Action Notice (Contribute / Update Gate) */}
+          {pendingNotice && (
+            <div
+              id="auth-pending-action-notice"
+              className="flex items-start gap-2.5 p-3.5 rounded-xl bg-indigo-50 border border-indigo-200/90 text-xs text-indigo-950 shadow-2xs"
+            >
+              <Info className="w-4 h-4 text-indigo-700 shrink-0 mt-0.5" />
+              <div className="space-y-0.5">
+                <p className="font-extrabold text-indigo-900">{pendingNotice.title}</p>
+                <p className="text-slate-600 leading-relaxed">{pendingNotice.description}</p>
+              </div>
+            </div>
+          )}
 
           {/* Feedback Alerts */}
           {errorMessage && (

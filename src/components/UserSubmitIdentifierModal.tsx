@@ -35,6 +35,7 @@ interface UserSubmitIdentifierModalProps {
   liveIdentifiers?: any[];
   onSuccess?: (submissionId: string, hunterId: string, newRecord?: ManualHunterRecord) => void;
   onSubmitSuccess?: (submissionId: string, hunterId: string, newRecord?: ManualHunterRecord) => void;
+  onRequireLogin?: (details: { initialRecord?: RecordItem; mode: 'new' | 'update' }) => void;
 }
 
 export const UserSubmitIdentifierModal: React.FC<UserSubmitIdentifierModalProps> = ({
@@ -48,6 +49,7 @@ export const UserSubmitIdentifierModal: React.FC<UserSubmitIdentifierModalProps>
   liveIdentifiers = [],
   onSuccess,
   onSubmitSuccess,
+  onRequireLogin,
 }) => {
   const [submissionType, setSubmissionType] = useState<'new' | 'update'>(
     initialRecord ? 'update' : mode
@@ -138,6 +140,17 @@ export const UserSubmitIdentifierModal: React.FC<UserSubmitIdentifierModalProps>
       '';
 
     const effectiveBank = (bankName === '__NEW__' ? customBank : bankName).trim() || fallbackBank;
+
+    if (!currentUser) {
+      setError('Authentication required. Please sign in to submit a contribution or update.');
+      if (onRequireLogin) {
+        onRequireLogin({
+          initialRecord: initialRecord || undefined,
+          mode: isUpdate ? 'update' : 'new',
+        });
+      }
+      return;
+    }
 
     if (!cleanHunterId) {
       setError('Please enter a valid Hunter Identifier Number.');

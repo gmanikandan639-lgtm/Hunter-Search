@@ -116,7 +116,7 @@ export const Header: React.FC<HeaderProps> = ({
                   id="desktop-nav-contribute"
                   onClick={onOpenUserSubmit}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-indigo-700 bg-indigo-50/70 hover:bg-indigo-100 hover:text-indigo-900 border border-indigo-200/60 transition-colors cursor-pointer"
-                  title="Contribute Hunter Identifier (No login required)"
+                  title="Contribute Hunter Identifier"
                 >
                   <PlusCircle className="w-3.5 h-3.5 text-indigo-600" />
                   <span>Contribute</span>
