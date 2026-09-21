@@ -371,8 +371,8 @@ export default function App() {
 
   // Search State
   const [defaultThreshold, setDefaultThreshold] = useState<number>(70);
-  const [searchQuery, setSearchQuery] = useState<string>('2024061800212');
-  const [hasSearched, setHasSearched] = useState<boolean>(true);
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [hasSearched, setHasSearched] = useState<boolean>(false);
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const [filters, setFilters] = useState<SearchFilters>({
     searchType: 'ALL',
@@ -574,10 +574,19 @@ export default function App() {
     [combinedRecords, manualRecords, liveIdentifiers]
   );
 
-  // Run initial search on mount
+  // Dynamic search execution as user types (with light 120ms debounce), clearing when query is empty
   useEffect(() => {
-    performSearch(searchQuery, filters, combinedRecords);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    const trimmed = searchQuery.trim();
+    if (!trimmed) {
+      setResults([]);
+      setHasSearched(false);
+      return;
+    }
+    const timer = setTimeout(() => {
+      performSearch(trimmed, filters, combinedRecords);
+    }, 120);
+    return () => clearTimeout(timer);
+  }, [searchQuery, filters, combinedRecords]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-refresh active search results whenever real-time Firestore LIVE identifiers, manual records, or CSV datasets update
   // Ensures normal users on Browser B see Admin additions or updates INSTANTLY without needing to refresh the page
@@ -1460,6 +1469,7 @@ export default function App() {
                   setSelectedRecord({ record, score, matchedFields })
                 }
                 onProposeUpdate={(rec) => handleOpenUserSubmit(rec, 'update')}
+                onOpenUserSubmit={() => handleOpenUserSubmit()}
               />
             </div>
           </div>

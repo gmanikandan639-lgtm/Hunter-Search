@@ -256,12 +256,58 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
   };
 
   return (
-    <div id="auth-page-container" className="w-full flex items-center justify-center py-6 px-4 sm:px-6">
-      <div className="w-full max-w-md">
-        {/* Main Authentication Card */}
+    <div id="auth-page-container" className="w-full max-w-5xl mx-auto flex items-center justify-center py-4 sm:py-8 px-4 sm:px-6 lg:px-8">
+      {/* Main Authentication Card: 2-Column Responsive Layout (50% Image Left, 50% Login Form Right) */}
+      <div
+        id="auth-card"
+        className="w-full bg-white rounded-3xl border border-slate-200/90 shadow-2xl shadow-slate-900/10 overflow-hidden grid grid-cols-1 lg:grid-cols-2"
+      >
+        {/* =============================================================== */}
+        {/* SECTION 1: LEFT SIDE – USER UPLOADED BANNER IMAGE (~50% DESKTOP) */}
+        {/* =============================================================== */}
         <div
-          id="auth-card"
-          className="bg-white rounded-2xl border border-slate-200 shadow-xl shadow-slate-200/50 p-6 sm:p-8 space-y-6 relative overflow-hidden"
+          id="login-left-image-section"
+          className="relative w-full h-48 sm:h-64 lg:h-auto min-h-[200px] lg:min-h-[620px] bg-slate-950 flex flex-col justify-between overflow-hidden"
+        >
+          {BRAND.loginBanner ? (
+            <img
+              id="login-banner-image"
+              src={BRAND.loginBanner}
+              alt="Fraud Risk Hub Banner"
+              className="w-full h-full object-cover object-center transition-transform duration-700 hover:scale-105"
+              referrerPolicy="no-referrer"
+            />
+          ) : (
+            <div className="w-full h-full flex flex-col items-center justify-center p-8 bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 text-white text-center">
+              <div className="w-16 h-16 rounded-2xl bg-indigo-950 border border-indigo-700 p-2 flex items-center justify-center mb-4">
+                <img src={BRAND.shieldIcon} alt="Shield" className="w-full h-full object-cover" />
+              </div>
+              <h3 className="text-lg font-black tracking-tight">{BRAND.name}</h3>
+              <p className="text-xs text-slate-400 mt-1">{BRAND.tagline}</p>
+            </div>
+          )}
+
+          {/* Visual gradient overlay for clean integration */}
+          <div className="absolute inset-0 bg-gradient-to-t from-slate-950/85 via-transparent to-slate-950/20 pointer-events-none" />
+
+          {/* Desktop & Tablet Lower Caption Badge */}
+          <div className="absolute bottom-4 left-4 right-4 z-10 hidden sm:flex items-center justify-between text-white/95 backdrop-blur-md bg-slate-950/75 py-2.5 px-4 rounded-2xl border border-white/15 text-[11px] shadow-lg">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="font-extrabold tracking-wide">Enterprise Fraud Prevention</span>
+            </div>
+            <span className="text-slate-300 text-[10px] font-mono tracking-wider font-semibold">
+              DETECT • ANALYZE • PREVENT
+            </span>
+          </div>
+        </div>
+
+        {/* =============================================================== */}
+        {/* SECTION 2: RIGHT SIDE – LOGIN FUNCTIONALITY (~50% DESKTOP) */}
+        {/* =============================================================== */}
+        <div
+          id="login-right-form-section"
+          className="p-6 sm:p-8 lg:p-10 flex flex-col justify-center space-y-6 relative overflow-hidden"
         >
           {/* Branding Header */}
           <div className="text-center space-y-2">

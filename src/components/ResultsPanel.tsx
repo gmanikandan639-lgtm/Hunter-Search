@@ -18,6 +18,7 @@ import {
   AlertTriangle,
   ShieldCheck,
   FileSearch,
+  PlusCircle,
 } from 'lucide-react';
 
 interface ResultsPanelProps {
@@ -30,6 +31,7 @@ interface ResultsPanelProps {
   isAdmin?: boolean;
   onSelectRecord: (record: RecordItem, score: number, matchedFields: any[]) => void;
   onProposeUpdate?: (record: RecordItem) => void;
+  onOpenUserSubmit?: () => void;
 }
 
 export const ResultsPanel: React.FC<ResultsPanelProps> = ({
@@ -42,11 +44,13 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
   isAdmin = false,
   onSelectRecord,
   onProposeUpdate,
+  onOpenUserSubmit,
 }) => {
   const [confidenceFilter, setConfidenceFilter] = useState<'ALL' | 'VERY_HIGH' | 'HIGH' | 'POSSIBLE'>('ALL');
   const [sortBy, setSortBy] = useState<'SCORE_DESC' | 'BANK_NAME' | 'REC_ID'>('SCORE_DESC');
 
   const hasActiveDatabase = csvMetadata.status === 'ACTIVE' && csvMetadata.recordCount > 0;
+  const isQueryActive = Boolean(searchQuery.trim() && hasSearched);
 
   // Filter and Sort results
   const filteredResults = results
@@ -103,7 +107,7 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
               </h2>
 
               {/* Highlighting Matching Status (Match Found vs No Match Found) */}
-              {hasActiveDatabase && hasSearched && !isSearching && (
+              {hasActiveDatabase && isQueryActive && !isSearching && (
                 results.length > 0 ? (
                   <span
                     id="status-match-found"
@@ -124,15 +128,20 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
               )}
             </div>
 
-            {hasActiveDatabase && hasSearched && searchQuery && (
+            {hasActiveDatabase && isQueryActive && searchQuery && (
               <p className="text-xs text-slate-500 mt-1">
                 Identifier Query: <span className="font-bold text-slate-800 font-mono">"{searchQuery}"</span>
+              </p>
+            )}
+            {hasActiveDatabase && !isQueryActive && (
+              <p className="text-xs text-slate-500 mt-1">
+                Enter an identifier on the left to verify records across active Bank & NBFC collections
               </p>
             )}
           </div>
 
           {/* Action Bar (Confidence Filters) */}
-          {hasActiveDatabase && hasSearched && results.length > 0 && (
+          {hasActiveDatabase && isQueryActive && results.length > 0 && (
             <div className="flex items-center gap-2 flex-wrap">
               {/* Confidence filter pills */}
               <div className="flex items-center bg-slate-100 p-0.5 rounded-xl border border-slate-200 text-xs">
@@ -203,23 +212,42 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
             </div>
           )}
 
-          {/* 3. Before Search State (Initial Landing) */}
-          {hasActiveDatabase && !isSearching && !hasSearched && (
-            <div id="state-before-search" className="p-14 text-center space-y-3">
-              <div className="w-16 h-16 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto shadow-inner">
-                <FileSearch className="w-8 h-8" />
+          {/* 3. Empty Search Bar / Initial Contribution State */}
+          {hasActiveDatabase && !isSearching && !isQueryActive && (
+            <div id="state-empty-initial" className="p-8 sm:p-12 text-center space-y-4">
+              <div className="w-14 h-14 rounded-2xl bg-indigo-50 border border-indigo-100 text-indigo-600 flex items-center justify-center mx-auto shadow-xs">
+                <ShieldCheck className="w-7 h-7 text-indigo-600" />
               </div>
-              <h3 className="text-base font-extrabold text-slate-800">
-                Enter a Hunter Identifier and click Search to view results.
-              </h3>
-              <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
-                Use the left-side search panel to paste or enter any Hunter Identifier number.
-              </p>
+              <div className="max-w-md mx-auto space-y-2">
+                <p
+                  id="hunter-initial-contribution-message"
+                  className="text-sm sm:text-base font-bold text-slate-800 leading-relaxed"
+                >
+                  Your contribution can help others. You can also contribute an identifier to help other users.
+                </p>
+                <p className="text-xs text-slate-500">
+                  Type any numbers, letters, or identifier details in the search bar on the left to search in real time.
+                </p>
+              </div>
+
+              {onOpenUserSubmit && (
+                <div className="pt-2 flex justify-center">
+                  <button
+                    id="initial-contribute-identifier-btn"
+                    type="button"
+                    onClick={onOpenUserSubmit}
+                    className="py-2.5 px-4.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-bold text-xs tracking-wide shadow-md shadow-indigo-600/20 transition-all flex items-center gap-2 cursor-pointer"
+                  >
+                    <PlusCircle className="w-4 h-4" />
+                    <span>Contribute Hunter Identifier</span>
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
           {/* 4. No Results Found State */}
-          {hasActiveDatabase && !isSearching && hasSearched && results.length === 0 && (
+          {hasActiveDatabase && !isSearching && isQueryActive && results.length === 0 && (
             <div id="state-no-results" className="p-14 text-center space-y-3">
               <div className="w-16 h-16 rounded-2xl bg-rose-50 text-rose-500 flex items-center justify-center mx-auto shadow-inner">
                 <AlertTriangle className="w-8 h-8" />
@@ -234,7 +262,7 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
           )}
 
           {/* 5. Results Table: VISIBLE ONLY IDENTIFIER NUMBER AND BANK NAME */}
-          {hasActiveDatabase && !isSearching && hasSearched && results.length > 0 && (
+          {hasActiveDatabase && !isSearching && isQueryActive && results.length > 0 && (
             <div className="overflow-x-auto">
               <table id="hunter-results-table" className="w-full text-left border-collapse text-xs">
                 <thead>

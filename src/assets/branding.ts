@@ -1,5 +1,6 @@
 import fullLogoImg from './images/fraud_risk_hub_logo_1788245471752.jpg';
 import shieldIconImg from './images/fraud_hub_shield_icon_1788245490812.jpg';
+import uploadedBannerImg from './images/IMG-20260921-WA0000.jpg';
 
 export const BRAND = {
   name: 'FRAUD RISK HUB',
@@ -9,4 +10,5 @@ export const BRAND = {
   description: 'Enterprise similarity and fuzzy matching platform for banking, NBFC, RCU, FCU, and fraud-control verification.',
   fullLogo: fullLogoImg,
   shieldIcon: shieldIconImg,
+  loginBanner: uploadedBannerImg || fullLogoImg,
 };
