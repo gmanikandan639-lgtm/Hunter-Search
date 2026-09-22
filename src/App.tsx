@@ -34,8 +34,6 @@ import { UserProfileModal } from './components/UserProfileModal';
 import { ReplaceConfirmModal } from './components/ReplaceConfirmModal';
 import { ClearConfirmModal } from './components/ClearConfirmModal';
 import { ToastNotification, ToastMessage } from './components/ToastNotification';
-import { GoogleAuthGate } from './components/GoogleAuthGate';
-import { FirebaseTestModal } from './components/FirebaseTestModal';
 import { BRAND } from './assets/branding';
 import { ShieldAlert } from 'lucide-react';
 import {
@@ -91,7 +89,6 @@ export default function App() {
     type: 'contribute' | 'update';
     record?: RecordItem | null;
   } | null>(null);
-  const [isFirebaseTestOpen, setIsFirebaseTestOpen] = useState<boolean>(false);
   const [dailyVisitorStats, setDailyVisitorStats] = useState<DailyVisitorStat[]>(SEED_DAILY_STATS);
 
   // Admin Session State
@@ -1416,8 +1413,15 @@ export default function App() {
   const handleAuthenticatedUser = async (user: any) => {
     setGoogleUser(user);
     try {
-      const { isAdmin } = await syncUserProfileInFirestore(user);
-      if (isAdmin || user.email === 'gmanikandan639@gmail.com') {
+      const { isAdmin, role } = await syncUserProfileInFirestore(user);
+      const isAuthorizedAdmin =
+        isAdmin ||
+        role === 'admin' ||
+        user.email === 'gmanikandan639@gmail.com' ||
+        user.email === 'manikandan@frh.com' ||
+        user.email === 'hunter_admin@fraudriskhub.com';
+
+      if (isAuthorizedAdmin) {
         setAdminSession({
           isAuthenticated: true,
           username: user.email || 'Admin',
@@ -1429,7 +1433,11 @@ export default function App() {
         });
       }
     } catch (e) {
-      if (user.email === 'gmanikandan639@gmail.com') {
+      if (
+        user.email === 'gmanikandan639@gmail.com' ||
+        user.email === 'manikandan@frh.com' ||
+        user.email === 'hunter_admin@fraudriskhub.com'
+      ) {
         setAdminSession({
           isAuthenticated: true,
           username: user.email || 'Admin',
@@ -1789,25 +1797,9 @@ export default function App() {
             <span className="font-mono font-bold text-slate-700">DETECT • ANALYZE • PREVENT</span>
             <span>•</span>
             <span>Administrator: <span className="font-semibold text-slate-800">Manikandan</span></span>
-            <span>•</span>
-            <button
-              id="footer-firebase-test-btn"
-              onClick={() => setIsFirebaseTestOpen(true)}
-              className="inline-flex items-center gap-1.5 font-mono text-[10px] font-semibold px-2.5 py-1 rounded-full bg-slate-100 hover:bg-amber-50 hover:text-amber-800 text-slate-600 border border-slate-200 transition-colors cursor-pointer"
-              title="Click to run live Firebase connection diagnostics (Step 6)"
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-              Firebase Test
-            </button>
           </div>
         </div>
       </footer>
-
-      {/* Temporary Firebase Connection Diagnostics Modal (Step 6) */}
-      <FirebaseTestModal
-        isOpen={isFirebaseTestOpen}
-        onClose={() => setIsFirebaseTestOpen(false)}
-      />
     </div>
   );
 }

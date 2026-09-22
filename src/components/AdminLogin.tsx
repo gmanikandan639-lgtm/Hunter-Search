@@ -9,6 +9,7 @@ import {
   Lock,
   Mail,
   User,
+  Phone,
   Eye,
   EyeOff,
   AlertCircle,
@@ -46,6 +47,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
   const [password, setPassword] = useState<string>('');
   const [confirmPassword, setConfirmPassword] = useState<string>('');
   const [fullName, setFullName] = useState<string>('');
+  const [phoneNumber, setPhoneNumber] = useState<string>('');
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState<boolean>(false);
 
@@ -62,6 +64,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
     setSuccessMessage(null);
     setPassword('');
     setConfirmPassword('');
+    setPhoneNumber('');
   };
 
   // Helper to complete user authentication and dispatch to appropriate dashboard
@@ -118,7 +121,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
       if (code === 'auth/popup-closed-by-user') {
         setErrorMessage('Google sign-in was cancelled before completion.');
       } else if (code === 'auth/unauthorized-domain') {
-        setErrorMessage('Domain authorization pending in Firebase. Please sign in with Email & Password below.');
+        setErrorMessage('Google Sign-In is not authorized for this domain. Please sign in with Email & Password below.');
       } else {
         setErrorMessage('Google authentication could not be completed. Please try again or use Email & Password.');
       }
@@ -137,12 +140,13 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
     const cleanPass = password.trim();
 
     if (!cleanEmail) {
-      setErrorMessage('Email Address is required.');
+      setErrorMessage('Email or Login ID is required.');
       return;
     }
+    const isFrhLoginId = /^([a-zA-Z0-9._%+-]+)@frh$/i.test(cleanEmail);
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(cleanEmail)) {
-      setErrorMessage('Please enter a valid email address.');
+    if (!isFrhLoginId && !emailRegex.test(cleanEmail)) {
+      setErrorMessage('Please enter a valid email address or Login ID.');
       return;
     }
     if (!cleanPass) {
@@ -183,6 +187,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
 
     const cleanName = fullName.trim();
     const cleanEmail = email.trim();
+    const cleanPhone = phoneNumber.trim();
     const cleanPass = password.trim();
     const cleanConfirm = confirmPassword.trim();
 
@@ -197,6 +202,11 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(cleanEmail)) {
       setErrorMessage('Please enter a valid email address.');
+      return;
+    }
+    // Mobile number is strictly optional. If provided, validate standard digits
+    if (cleanPhone && !/^[+]?[\d\s-]{7,15}$/.test(cleanPhone)) {
+      setErrorMessage('Please enter a valid mobile number or leave it blank.');
       return;
     }
     if (!cleanPass) {
@@ -215,7 +225,12 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
     setIsLoading(true);
 
     try {
-      const { user, profile } = await signUpWithEmail(cleanName, cleanEmail, cleanPass);
+      const { user, profile } = await signUpWithEmail(
+        cleanName,
+        cleanEmail,
+        cleanPass,
+        cleanPhone || undefined
+      );
       handleAuthCompleted(user, profile);
     } catch (err: any) {
       console.warn('Email sign up error:', err?.code, err?.message);
@@ -383,7 +398,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
                     htmlFor="email-input"
                     className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider"
                   >
-                    Email
+                    Email or Login ID
                   </label>
                   <div className="relative">
                     <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
@@ -391,14 +406,14 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
                     </div>
                     <input
                       id="email-input"
-                      type="email"
+                      type="text"
                       required
                       value={email}
                       onChange={(e) => {
                         setEmail(e.target.value);
                         if (errorMessage) setErrorMessage(null);
                       }}
-                      placeholder="name@company.com"
+                      placeholder="name@company.com or Login ID"
                       className="w-full pl-10 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-900 placeholder:text-slate-400 focus:bg-white focus:border-indigo-600 focus:ring-2 focus:ring-indigo-600/20 transition-all outline-none"
                     />
                   </div>
@@ -580,6 +595,35 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
                         if (errorMessage) setErrorMessage(null);
                       }}
                       placeholder="name@company.com"
+                      className="w-full pl-10 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-900 placeholder:text-slate-400 focus:bg-white focus:border-indigo-600 focus:ring-2 focus:ring-indigo-600/20 transition-all outline-none"
+                    />
+                  </div>
+                </div>
+
+                {/* Optional Mobile Number */}
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <label
+                      htmlFor="signup-phone-input"
+                      className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider"
+                    >
+                      Mobile Number
+                    </label>
+                    <span className="text-[10px] font-semibold text-slate-400">Optional</span>
+                  </div>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                      <Phone className="w-4 h-4 text-slate-500" />
+                    </div>
+                    <input
+                      id="signup-phone-input"
+                      type="tel"
+                      value={phoneNumber}
+                      onChange={(e) => {
+                        setPhoneNumber(e.target.value);
+                        if (errorMessage) setErrorMessage(null);
+                      }}
+                      placeholder="+91 98765 43210 (Optional)"
                       className="w-full pl-10 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-900 placeholder:text-slate-400 focus:bg-white focus:border-indigo-600 focus:ring-2 focus:ring-indigo-600/20 transition-all outline-none"
                     />
                   </div>

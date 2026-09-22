@@ -203,6 +203,8 @@ export interface FirestoreUserProfile {
   name: string;
   email: string;
   photoURL?: string;
+  phoneNumber?: string;
+  mobile?: string;
   role: 'admin' | 'user' | string;
   auth_provider?: string;
   provider?: string;

@@ -7,11 +7,23 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // Admin authorization: strictly based on users/{uid}.role == "admin"
+    // Pre-authorized administrator emails for initial bootstrap
+    function isPreAuthorizedAdminEmail() {
+      return isAuthenticated() && (
+        request.auth.token.email == 'hunter_admin@fraudriskhub.com' ||
+        request.auth.token.email == 'gmanikandan639@gmail.com' ||
+        request.auth.token.email == 'manikandan@frh.com'
+      );
+    }
+
+    // Admin authorization: verified through database role or pre-authorized admin email
     function isAdmin() {
       return isAuthenticated() && (
-        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+        isPreAuthorizedAdminEmail() ||
+        (
+          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+        )
       );
     }
 

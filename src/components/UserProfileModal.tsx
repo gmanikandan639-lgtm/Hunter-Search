@@ -8,6 +8,7 @@ import {
   X,
   User,
   Mail,
+  Phone,
   ShieldCheck,
   CheckCircle2,
   Clock,
@@ -99,7 +100,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
             <div>
               <h3 className="text-base font-extrabold text-slate-900">User Account Profile</h3>
               <p className="text-xs text-slate-500 font-medium">
-                Hunter Verification Security Credentials & Contributions
+                Hunter Verification Profile & Submissions
               </p>
             </div>
           </div>
@@ -210,6 +211,14 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                   {currentUser?.providerData?.[0]?.providerId === 'google.com' || currentUser?.email?.endsWith('@gmail.com') ? 'Google Verified' : 'Verified User'}
                 </span>
               </div>
+
+              {(currentUser.phoneNumber || currentUser.mobile) && (
+                <div className="flex items-center justify-center sm:justify-start gap-2 text-xs text-slate-600 font-medium">
+                  <Phone className="w-3.5 h-3.5 text-slate-400" />
+                  <span>{currentUser.phoneNumber || currentUser.mobile}</span>
+                  <span className="text-[10px] text-slate-400 font-semibold">• Mobile</span>
+                </div>
+              )}
             </div>
           </div>
 

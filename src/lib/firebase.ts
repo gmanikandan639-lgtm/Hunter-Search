@@ -216,8 +216,24 @@ export const isAuthorizedAdmin = (user: FirebaseUser | null): boolean => {
     email === 'gmanikandan639@gmail.com' ||
     email === 'hunter_admin@fraudriskhub.com' ||
     email === 'admin_e2e@fraudriskhub.com' ||
+    email === 'manikandan@frh.com' ||
     email.includes('admin')
   );
+};
+
+/**
+ * Normalizes user-entered login identifier (such as Manikandan@FRH) into standard Firebase auth email
+ */
+export const normalizeLoginIdentifier = (identifier: string): string => {
+  const trimmed = identifier.trim();
+  if (trimmed.toLowerCase() === 'manikandan@frh') {
+    return 'manikandan@frh.com';
+  }
+  const frhMatch = trimmed.match(/^([a-zA-Z0-9._%+-]+)@frh$/i);
+  if (frhMatch) {
+    return `${frhMatch[1].toLowerCase()}@frh.com`;
+  }
+  return trimmed;
 };
 
 /**
@@ -247,24 +263,11 @@ export const ensureAdminFirebaseAuthenticated = async (): Promise<FirebaseUser> 
 };
 
 /**
- * Authenticates against Firebase Auth using provided Admin credentials or demo credentials.
+ * Authenticates against Firebase Auth using provided credentials without hardcoded frontend checks.
  */
 export const signInWithAdminCredentials = async (username: string, pass: string): Promise<FirebaseUser> => {
-  const trimmedUser = username.trim();
-  const trimmedPass = pass.trim();
-
-  const isAuthorized =
-    (trimmedUser === 'Manikandan@FRH' && trimmedPass === 'Manikandan@123') ||
-    (trimmedUser.toLowerCase() === 'admin' && trimmedPass === 'admin123') ||
-    (trimmedUser === 'gmanikandan639@gmail.com' && trimmedPass === 'Manikandan@123') ||
-    (trimmedUser === ADMIN_FIREBASE_EMAIL && trimmedPass === ADMIN_FIREBASE_PASS);
-
-  if (!isAuthorized) {
-    throw new Error('Invalid administrator credentials.');
-  }
-
-  const cred = await signInWithEmailAndPassword(auth, ADMIN_FIREBASE_EMAIL, ADMIN_FIREBASE_PASS);
-  return cred.user;
+  const { user } = await signInWithEmail(username, pass);
+  return user;
 };
 
 // Demo / Test Google Profile helper for preview / staging environments
@@ -311,13 +314,15 @@ export const logOut = async (): Promise<void> => {
 };
 
 /**
- * Register a new user with Email + Password via Firebase Auth
+ * Register new user with Email + Password via Firebase Auth
+ * Optional mobileNumber is saved to profile only when provided (no fake/default values).
  * Automatically creates Firestore document users/{uid} with role = "user"
  */
 export const signUpWithEmail = async (
   fullName: string,
   email: string,
-  pass: string
+  pass: string,
+  mobileNumber?: string
 ): Promise<{ user: FirebaseUser; profile: { isAdmin: boolean; role: string; name: string } }> => {
   const cred = await createUserWithEmailAndPassword(auth, email.trim(), pass);
   if (fullName.trim()) {
@@ -327,20 +332,46 @@ export const signUpWithEmail = async (
       console.warn('Profile name update notice:', e);
     }
   }
-  const profile = await syncUserProfileInFirestore(cred.user, fullName.trim());
+  const profile = await syncUserProfileInFirestore(cred.user, fullName.trim(), mobileNumber);
   return { user: cred.user, profile };
 };
 
 /**
- * Sign in existing user with Email + Password via Firebase Auth
+ * Sign in existing user with Email or Login ID + Password via Firebase Auth.
+ * Supports Admin accounts (such as Manikandan@FRH) and standard user accounts.
  */
 export const signInWithEmail = async (
-  email: string,
+  emailOrLoginId: string,
   pass: string
 ): Promise<{ user: FirebaseUser; profile: { isAdmin: boolean; role: string; name: string } }> => {
-  const cred = await signInWithEmailAndPassword(auth, email.trim(), pass);
-  const profile = await syncUserProfileInFirestore(cred.user);
-  return { user: cred.user, profile };
+  const targetEmail = normalizeLoginIdentifier(emailOrLoginId);
+  const cleanPass = pass.trim();
+
+  try {
+    const cred = await signInWithEmailAndPassword(auth, targetEmail, cleanPass);
+    const profile = await syncUserProfileInFirestore(cred.user);
+    return { user: cred.user, profile };
+  } catch (err: any) {
+    const code = err?.code;
+    // Auto-bootstrap Manikandan@FRH admin account in Firebase Authentication if not yet created on this project
+    if (
+      (code === 'auth/user-not-found' || code === 'auth/invalid-credential') &&
+      targetEmail.toLowerCase() === 'manikandan@frh.com'
+    ) {
+      try {
+        const newCred = await createUserWithEmailAndPassword(auth, targetEmail, cleanPass);
+        await updateProfile(newCred.user, { displayName: 'Manikandan (Administrator)' });
+        const profile = await syncUserProfileInFirestore(newCred.user, 'Manikandan');
+        return { user: newCred.user, profile };
+      } catch (createErr: any) {
+        if (createErr?.code === 'auth/email-already-in-use') {
+          throw new Error('Invalid email or password.');
+        }
+        throw createErr;
+      }
+    }
+    throw err;
+  }
 };
 
 /**
@@ -353,43 +384,71 @@ export const sendPasswordReset = async (email: string): Promise<void> => {
 // Synchronize User profile & check admin in Firestore
 export const syncUserProfileInFirestore = async (
   user: FirebaseUser,
-  overrideName?: string
-): Promise<{ isAdmin: boolean; role: string; name: string; email: string; photoURL: string }> => {
+  overrideName?: string,
+  mobileNumber?: string
+): Promise<{ isAdmin: boolean; role: string; name: string; email: string; photoURL: string; phoneNumber?: string }> => {
   try {
     const userDocRef = doc(db, 'users', user.uid);
     const now = new Date().toISOString();
 
     const snap = await getDoc(userDocRef);
 
+    const isAdminAccount =
+      user.email === ADMIN_FIREBASE_EMAIL ||
+      user.email?.toLowerCase() === 'gmanikandan639@gmail.com' ||
+      user.email?.toLowerCase() === 'manikandan@frh.com';
+
     if (snap.exists()) {
       const data = snap.data();
-      // Keep existing role! Never overwrite an admin role with user
-      const existingRole = data.role === 'admin' ? 'admin' : 'user';
+      // Keep existing role! Ensure designated authorized admin accounts retain 'admin' role
+      const existingRole = isAdminAccount ? 'admin' : (data.role === 'admin' ? 'admin' : 'user');
       const userName = overrideName || user.displayName || data.name || user.email?.split('@')[0] || 'User';
 
       const authProvider =
         user.providerData?.[0]?.providerId ||
         (user.email?.endsWith('@gmail.com') ? 'google.com' : 'password');
 
-      // Update non-role profile fields
-      await setDoc(
-        userDocRef,
-        {
-          uid: user.uid,
-          name: userName,
-          full_name: userName,
-          displayName: userName,
-          email: user.email || data.email || '',
-          photoURL: user.photoURL || data.photoURL || '',
-          auth_provider: authProvider,
-          provider: authProvider,
-          status: data.status || 'Active',
-          updatedAt: serverTimestamp(),
-          updated_at: serverTimestamp(),
-          lastLogin: now,
-        },
-        { merge: true }
-      );
+      // Update profile fields
+      const updateData: any = {
+        uid: user.uid,
+        name: userName,
+        full_name: userName,
+        displayName: userName,
+        email: user.email || data.email || '',
+        photoURL: user.photoURL || data.photoURL || '',
+        auth_provider: authProvider,
+        provider: authProvider,
+        role: existingRole,
+        status: data.status || 'Active',
+        updatedAt: serverTimestamp(),
+        updated_at: serverTimestamp(),
+        lastLogin: now,
+      };
+
+      // Store mobile number only when provided; do not store fake or default numbers
+      if (mobileNumber && mobileNumber.trim()) {
+        updateData.phoneNumber = mobileNumber.trim();
+        updateData.mobile = mobileNumber.trim();
+      }
+
+      await setDoc(userDocRef, updateData, { merge: true });
+
+      if (existingRole === 'admin') {
+        try {
+          const adminDocRef = doc(db, 'admins', user.uid);
+          await setDoc(
+            adminDocRef,
+            {
+              uid: user.uid,
+              email: user.email,
+              displayName: userName,
+              role: 'admin',
+              assignedAt: now,
+            },
+            { merge: true }
+          );
+        } catch {}
+      }
 
       return {
         isAdmin: existingRole === 'admin',
@@ -397,19 +456,18 @@ export const syncUserProfileInFirestore = async (
         name: userName,
         email: user.email || '',
         photoURL: user.photoURL || '',
+        phoneNumber: data.phoneNumber || data.mobile || mobileNumber || '',
       };
     } else {
       // New account - Default role: "user"
       // Designated admin credentials receive admin role automatically on first initialization
-      const isAdminAccount =
-        user.email === ADMIN_FIREBASE_EMAIL || user.email?.toLowerCase() === 'gmanikandan639@gmail.com';
       const defaultRole = isAdminAccount ? 'admin' : 'user';
       const userName = overrideName || user.displayName || user.email?.split('@')[0] || 'User';
       const authProvider =
         user.providerData?.[0]?.providerId ||
         (user.email?.endsWith('@gmail.com') ? 'google.com' : 'password');
 
-      await setDoc(userDocRef, {
+      const newUserData: any = {
         uid: user.uid,
         name: userName,
         full_name: userName,
@@ -425,7 +483,15 @@ export const syncUserProfileInFirestore = async (
         updatedAt: serverTimestamp(),
         updated_at: serverTimestamp(),
         lastLogin: now,
-      });
+      };
+
+      // Store mobile number only when provided; do not store fake or default numbers
+      if (mobileNumber && mobileNumber.trim()) {
+        newUserData.phoneNumber = mobileNumber.trim();
+        newUserData.mobile = mobileNumber.trim();
+      }
+
+      await setDoc(userDocRef, newUserData);
 
       if (defaultRole === 'admin') {
         try {
@@ -450,37 +516,143 @@ export const syncUserProfileInFirestore = async (
         name: userName,
         email: user.email || '',
         photoURL: user.photoURL || '',
+        phoneNumber: mobileNumber?.trim() || '',
       };
     }
   } catch (err) {
     console.warn('Sync user profile note:', err);
     const isAdminAccount =
-      user.email === ADMIN_FIREBASE_EMAIL || user.email?.toLowerCase() === 'gmanikandan639@gmail.com';
+      user.email === ADMIN_FIREBASE_EMAIL ||
+      user.email?.toLowerCase() === 'gmanikandan639@gmail.com' ||
+      user.email?.toLowerCase() === 'manikandan@frh.com';
     return {
       isAdmin: isAdminAccount,
       role: isAdminAccount ? 'admin' : 'user',
       name: overrideName || user.displayName || user.email?.split('@')[0] || 'User',
       email: user.email || '',
       photoURL: user.photoURL || '',
+      phoneNumber: mobileNumber?.trim() || '',
     };
   }
 };
 
 /**
- * Update authenticated user's permitted profile fields (e.g. name).
+ * Update authenticated user's permitted profile fields (e.g. name, phoneNumber).
  * Role is strictly protected and never modified by this function.
  */
 export const updateUserProfileInFirestore = async (
   uid: string,
-  data: { name?: string }
+  data: { name?: string; phoneNumber?: string; mobile?: string }
 ): Promise<void> => {
   const userDocRef = doc(db, 'users', uid);
   const now = new Date().toISOString();
-  await updateDoc(userDocRef, {
-    ...(data.name ? { name: data.name.trim(), displayName: data.name.trim() } : {}),
+  const updatePayload: any = {
     updatedAt: now,
-  });
+  };
+  if (data.name !== undefined) {
+    updatePayload.name = data.name.trim();
+    updatePayload.displayName = data.name.trim();
+    updatePayload.full_name = data.name.trim();
+  }
+  if (data.phoneNumber !== undefined || data.mobile !== undefined) {
+    const phone = (data.phoneNumber || data.mobile || '').trim();
+    if (phone) {
+      updatePayload.phoneNumber = phone;
+      updatePayload.mobile = phone;
+    }
+  }
+  await updateDoc(userDocRef, updatePayload);
 };
+
+/**
+ * Proactively initializes designated Admin account (Manikandan@FRH) in Firebase Auth
+ * using a separate Firebase app instance so current session is unaffected.
+ */
+export const initAdminAccounts = async (): Promise<void> => {
+  try {
+    const secondaryAppName = 'SecondaryAdminInit';
+    const secondaryApp =
+      getApps().find((a) => a.name === secondaryAppName) ||
+      initializeApp(firebaseConfig, secondaryAppName);
+    const secondaryAuth = getAuth(secondaryApp);
+
+    try {
+      const cred = await signInWithEmailAndPassword(secondaryAuth, 'manikandan@frh.com', 'Password@123');
+      const uid = cred.user.uid;
+      await setDoc(
+        doc(db, 'users', uid),
+        {
+          uid,
+          name: 'Manikandan',
+          full_name: 'Manikandan',
+          displayName: 'Manikandan (Administrator)',
+          email: 'manikandan@frh.com',
+          loginId: 'Manikandan@FRH',
+          role: 'admin',
+          status: 'Active',
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+      await setDoc(
+        doc(db, 'admins', uid),
+        {
+          uid,
+          email: 'manikandan@frh.com',
+          role: 'admin',
+        },
+        { merge: true }
+      );
+      await fbSignOut(secondaryAuth);
+    } catch (err: any) {
+      const code = err?.code;
+      if (code === 'auth/user-not-found' || code === 'auth/invalid-credential') {
+        try {
+          const cred = await createUserWithEmailAndPassword(
+            secondaryAuth,
+            'manikandan@frh.com',
+            'Password@123'
+          );
+          const uid = cred.user.uid;
+          await updateProfile(cred.user, { displayName: 'Manikandan (Administrator)' });
+          await setDoc(
+            doc(db, 'users', uid),
+            {
+              uid,
+              name: 'Manikandan',
+              full_name: 'Manikandan',
+              displayName: 'Manikandan (Administrator)',
+              email: 'manikandan@frh.com',
+              loginId: 'Manikandan@FRH',
+              role: 'admin',
+              status: 'Active',
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            },
+            { merge: true }
+          );
+          await setDoc(
+            doc(db, 'admins', uid),
+            {
+              uid,
+              email: 'manikandan@frh.com',
+              role: 'admin',
+            },
+            { merge: true }
+          );
+          await fbSignOut(secondaryAuth);
+        } catch (createErr) {
+          console.warn('Admin account creation note:', createErr);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Admin account bootstrap note:', err);
+  }
+};
+
+// Bootstrap admin accounts in the background
+initAdminAccounts().catch(() => {});
 
 export const DEFAULT_DIRECTORY_USERS: FirestoreUserProfile[] = [
   {
@@ -544,6 +716,8 @@ export const subscribeToAllRegisteredUsers = (
               d.provider ||
               (d.email?.endsWith('@gmail.com') ? 'google.com' : 'password'),
             status: d.status || 'Active',
+            phoneNumber: d.phoneNumber || d.mobile || '',
+            mobile: d.mobile || d.phoneNumber || '',
             createdAt: createdAtVal,
             updatedAt: updatedAtVal,
             lastLogin: d.lastLogin || '',

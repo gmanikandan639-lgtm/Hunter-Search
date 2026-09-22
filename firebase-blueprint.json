@@ -42,6 +42,8 @@
         "uid": { "type": "string", "description": "Firebase Authentication UID" },
         "name": { "type": "string", "description": "User display name" },
         "email": { "type": "string", "description": "User email address" },
+        "phoneNumber": { "type": "string", "description": "User optional mobile phone number" },
+        "mobile": { "type": "string", "description": "User optional mobile number copy" },
         "photoURL": { "type": "string", "description": "User avatar photo URL" },
         "role": { "type": "string", "description": "Authorization role: 'admin' or 'user'" },
         "createdAt": { "type": "string", "description": "Creation ISO timestamp" },
