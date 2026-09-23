@@ -58,7 +58,8 @@ import { AdminUserManagement } from './AdminUserManagement';
 import { maskIdentifierNumber, maskGenericNumber } from '../utils/masking';
 import { VisitorStats, DailyVisitorStat, LiveIdentifierRecord, SubmissionRecord, LiveSyncStatus } from '../types';
 import { AdminFirebaseDiagnostics } from './AdminFirebaseDiagnostics';
-import { formatDailyDateDisplay, SEED_DAILY_STATS, subscribeToAllRegisteredUsers, seedDefaultUsersIfEmpty } from '../lib/firebase';
+import { formatDailyDateDisplay, SEED_DAILY_STATS, subscribeToAllRegisteredUsers, seedDefaultUsersIfEmpty, exportLiveIdentifiersDirectFromFirestore } from '../lib/firebase';
+import { OrganisationWiseCount } from './OrganisationWiseCount';
 
 interface AdminDashboardProps {
   adminSession: AdminSession;
@@ -294,9 +295,74 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     reader.readAsText(file);
   };
 
+  // Download Overall Identifier Details directly from Cloud Firestore
+  const [isExportingFirestore, setIsExportingFirestore] = useState(false);
+
+  const handleDownloadOverallIdentifierDetails = async () => {
+    setIsExportingFirestore(true);
+    try {
+      const res = await exportLiveIdentifiersDirectFromFirestore();
+      if (onTriggerToast) {
+        onTriggerToast({
+          type: 'success',
+          title: 'Complete Firebase Dataset Downloaded',
+          message: `Successfully exported ${res.count} Hunter Identifier records directly from Cloud Firestore.`,
+          subtext: `Saved to ${res.filename}`,
+        });
+      }
+    } catch (err: any) {
+      if (onTriggerToast) {
+        onTriggerToast({
+          type: 'error',
+          title: 'Dataset Export Failed',
+          message: err?.message || 'Failed to download master dataset from Cloud Firestore.',
+        });
+      }
+    } finally {
+      setIsExportingFirestore(false);
+    }
+  };
+
+  // Combine manualRecords and liveIdentifiers so Admin can manage the entire LIVE database
+  const unifiedLiveRecords = useMemo(() => {
+    const map = new Map<string, ManualHunterRecord>();
+    manualRecords.forEach((m) => {
+      map.set(m.id, m);
+    });
+
+    liveIdentifiers.forEach((l) => {
+      if (!map.has(l.id)) {
+        map.set(l.id, {
+          id: l.id,
+          hunterId: l.identifier || l.hunterId || l.id,
+          bankName: l.organisationName || l.bankName || 'Unspecified Organisation',
+          orgType: (l.orgType as any) || (l.rawColumns?.['Bank-NBFC'] as any) || 'Bank',
+          name: l.name || l.identifier,
+          status: l.status || 'Active Reference',
+          remarks: l.remarks || l.details || '',
+          notes: l.details || '',
+          createdBy: l.createdBy || 'System Migration',
+          createdAt: l.createdAt || '',
+          updatedAt: l.updatedAt || '',
+          approvalStatus: 'approved',
+          rawColumns: l.rawColumns,
+        });
+      }
+    });
+
+    return Array.from(map.values());
+  }, [manualRecords, liveIdentifiers]);
+
   // Navigation tabs configuration
   const navItems = [
     { id: 'overview', label: 'Dashboard', icon: LayoutDashboard },
+    {
+      id: 'organisation-counts',
+      label: 'Organisation Wise Count',
+      icon: Building2,
+      badge: liveIdentifiers.length > 0 ? liveIdentifiers.length : undefined,
+      badgeColor: 'bg-emerald-100 text-emerald-800 font-bold',
+    },
     {
       id: 'users',
       label: 'User Accounts & Logins',
@@ -315,7 +381,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       id: 'manual-records',
       label: 'Live Manual Identifiers',
       icon: UserPlus,
-      badge: approvedManualRecords.length,
+      badge: unifiedLiveRecords.length,
     },
     { id: 'csv-management', label: 'CSV Data Management', icon: Database },
     { id: 'search-history', label: 'Search History', icon: History, badge: searchHistory.length },
@@ -324,9 +390,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Filtered Manual Hunter Identifiers
   const filteredManualRecords = useMemo(() => {
-    if (!manualSearch.trim()) return manualRecords;
+    const sourceRecords = unifiedLiveRecords;
+    if (!manualSearch.trim()) return sourceRecords;
     const q = manualSearch.toLowerCase().trim();
-    return manualRecords.filter((r) => {
+    return sourceRecords.filter((r) => {
       const matchId = (r.hunterId || '').toLowerCase().includes(q);
       const matchBank = (r.bankName || '').toLowerCase().includes(q);
       const matchName = (r.name || '').toLowerCase().includes(q);
@@ -334,7 +401,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       const matchRemarks = (r.remarks || r.notes || '').toLowerCase().includes(q);
       return matchId || matchBank || matchName || matchStatus || matchRemarks;
     });
-  }, [manualRecords, manualSearch]);
+  }, [unifiedLiveRecords, manualSearch]);
 
   const totalManualPages = Math.max(1, Math.ceil(filteredManualRecords.length / manualRowsPerPage));
   const paginatedManualRecords = useMemo(() => {
@@ -404,6 +471,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
         {/* Top Bar Quick Controls */}
         <div className="flex items-center gap-2.5 shrink-0">
+          <button
+            id="admin-topbar-download-all-btn"
+            type="button"
+            onClick={handleDownloadOverallIdentifierDetails}
+            disabled={isExportingFirestore}
+            className="flex items-center gap-1.5 py-2 px-3.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-black shadow-xs transition-all cursor-pointer disabled:opacity-50"
+            title="Download entire current Firebase dataset in ONE CSV file (CSV + Admin Manual records)"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>{isExportingFirestore ? 'Exporting...' : 'Download Overall Identifier Details'}</span>
+          </button>
+
           <button
             id="view-public-search-btn"
             type="button"
@@ -617,11 +696,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <button
                   id="admin-download-overall-identifiers-btn"
                   type="button"
-                  onClick={onExportDataset}
-                  className="shrink-0 px-4 py-2.5 rounded-xl bg-white hover:bg-indigo-50 text-indigo-900 text-xs font-black shadow-sm flex items-center gap-2 transition-all cursor-pointer"
+                  onClick={handleDownloadOverallIdentifierDetails}
+                  disabled={isExportingFirestore}
+                  className="shrink-0 px-4 py-2.5 rounded-xl bg-white hover:bg-indigo-50 text-indigo-900 text-xs font-black shadow-sm flex items-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+                  title="Download complete current database from Cloud Firestore in one CSV file"
                 >
                   <Download className="w-4 h-4 text-indigo-700" />
-                  <span>Download Overall Identifier Details</span>
+                  <span>{isExportingFirestore ? 'Generating Overall CSV...' : 'Download Overall Identifier Details'}</span>
                 </button>
               </div>
 
@@ -1031,6 +1112,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           )}
 
           {/* ======================================================== */}
+          {/* TAB: ORGANISATION WISE COUNT (ADMIN ONLY) */}
+          {/* ======================================================== */}
+          {activeTab === 'organisation-counts' && (
+            <div id="admin-tab-organisation-counts" className="space-y-6 animate-in fade-in duration-200">
+              <OrganisationWiseCount
+                liveIdentifiers={liveIdentifiers}
+                onDownloadOverallData={handleDownloadOverallIdentifierDetails}
+                isDownloadingOverall={isExportingFirestore}
+              />
+            </div>
+          )}
+
+          {/* ======================================================== */}
           {/* TAB: USER ACCOUNTS & LOGINS DIRECTORY (ADMIN ONLY) */}
           {/* ======================================================== */}
           {activeTab === 'users' && (
@@ -1370,12 +1464,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <button
                         id="admin-download-dataset-btn"
                         type="button"
-                        onClick={onExportDataset}
-                        className="flex items-center gap-1.5 py-2 px-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold shadow-sm transition-colors cursor-pointer"
-                        title="Download active Hunter Identifier dataset as CSV (Admin Exclusive)"
+                        onClick={handleDownloadOverallIdentifierDetails}
+                        disabled={isExportingFirestore}
+                        className="flex items-center gap-1.5 py-2 px-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold shadow-sm transition-colors cursor-pointer disabled:opacity-50"
+                        title="Download complete current Hunter Identifier dataset from Cloud Firestore as CSV (Admin Exclusive)"
                       >
                         <Download className="w-3.5 h-3.5" />
-                        <span>Download Overall Identifier Details</span>
+                        <span>{isExportingFirestore ? 'Exporting...' : 'Download Overall Identifier Details'}</span>
                       </button>
                     )}
                     {hasData && (
@@ -1553,13 +1648,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                     <button
                       type="button"
-                      onClick={onExportDataset}
-                      disabled={!hasData}
+                      onClick={handleDownloadOverallIdentifierDetails}
+                      disabled={!hasData && (!liveIdentifiers || liveIdentifiers.length === 0)}
                       className="py-1.5 px-2.5 rounded-lg bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 text-xs font-bold border border-slate-200 transition-colors flex items-center gap-1 cursor-pointer"
-                      title="Export active records to CSV"
+                      title="Download complete current Hunter Identifier dataset from Cloud Firestore as CSV"
                     >
                       <Download className="w-3.5 h-3.5" />
-                      <span className="hidden sm:inline">Export CSV</span>
+                      <span className="hidden sm:inline">Export Overall CSV</span>
                     </button>
                   </div>
                 </div>

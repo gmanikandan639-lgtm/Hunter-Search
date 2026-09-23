@@ -6,15 +6,26 @@
         "identifier": { "type": "string", "description": "Identifier (Hunter ID, PAN, Mobile, Account, Tax ID)" },
         "normalizedIdentifier": { "type": "string", "description": "Standardized uppercase normalized identifier for exact index searching" },
         "bankName": { "type": "string", "description": "Originating bank or financial institution" },
+        "organisationName": { "type": "string", "description": "Unmasked name of the organisation or bank" },
+        "orgType": { "type": "string", "description": "Classification type (Bank or NBFC)" },
         "details": { "type": "string", "description": "Entity name, match details, or risk notes" },
         "source": { "type": "string", "description": "Data source, approval reference, or dataset origin" },
         "status": { "type": "string", "description": "Lifecycle status: 'approved', 'live', or 'retired'" },
-        "createdBy": { "type": "string", "description": "Creator user/admin or 'Public Submission'" },
+        "createdBy": { "type": "string", "description": "Creator user/admin or 'System Migration'" },
         "createdAt": { "type": "string", "description": "Creation ISO timestamp" },
         "updatedBy": { "type": "string", "description": "Admin email who updated the record" },
         "updatedAt": { "type": "string", "description": "Last update ISO timestamp" },
         "approvedBy": { "type": "string", "description": "Admin email who approved the record" },
         "approvedAt": { "type": "string", "description": "Approval ISO timestamp" }
+      }
+    },
+    "visitor_stats": {
+      "description": "Daily visitor counters and metrics resetting at 00:00:00 UTC",
+      "fields": {
+        "date": { "type": "string", "description": "Calendar date string YYYY-MM-DD" },
+        "visitorCount": { "type": "number", "description": "Number of unique visitors today" },
+        "createdAt": { "type": "string", "description": "Record creation ISO timestamp" },
+        "updatedAt": { "type": "string", "description": "Record last update ISO timestamp" }
       }
     },
     "submissions": {

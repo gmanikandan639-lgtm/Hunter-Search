@@ -68,6 +68,7 @@ import {
   downloadLiveIdentifiersAsCSV,
   exportLiveIdentifiersDirectFromFirestore,
   seedLiveIdentifiersIfEmpty,
+  getNormalizedIdentifier,
   LiveIdentifierRecord,
   SubmissionRecord,
 } from './lib/firebase';
@@ -82,10 +83,6 @@ export default function App() {
   const [liveSyncStatus, setLiveSyncStatus] = useState<LiveSyncStatus>('connected');
   const [googleUser, setGoogleUser] = useState<FirebaseUser | null>(null);
   const [isAuthChecking, setIsAuthChecking] = useState<boolean>(false);
-  const [pendingAuthAction, setPendingAuthAction] = useState<{
-    type: 'contribute' | 'update';
-    record?: RecordItem | null;
-  } | null>(null);
   const [dailyVisitorStats, setDailyVisitorStats] = useState<DailyVisitorStat[]>(SEED_DAILY_STATS);
 
   // Admin Session State
@@ -155,11 +152,6 @@ export default function App() {
   const [liveIdentifiers, setLiveIdentifiers] = useState<LiveIdentifierRecord[]>([]);
   const [submissionsList, setSubmissionsList] = useState<SubmissionRecord[]>([]);
   const [lastSnapshotTimestamp, setLastSnapshotTimestamp] = useState<Date | null>(new Date());
-
-  // User Frontend Submission Modal State
-  const [isUserSubmitModalOpen, setIsUserSubmitModalOpen] = useState<boolean>(false);
-  const [userSubmitInitialRecord, setUserSubmitInitialRecord] = useState<RecordItem | null>(null);
-  const [userSubmitMode, setUserSubmitMode] = useState<'new' | 'update'>('new');
 
   // Pending Approvals Count Memo
   const pendingApprovalsCount = useMemo(() => {
@@ -471,7 +463,6 @@ export default function App() {
     }
     setGoogleUser(null);
     setAdminSession(null);
-    setPendingAuthAction(null);
     setActivePage('search');
     triggerToast({
       type: 'info',
@@ -884,13 +875,32 @@ export default function App() {
 
   // Step 6: Handle Manual Hunter Record Entry (Admin Only - Cloud Firestore Real-Time Database)
   const handleAddManualRecord = async (input: ManualRecordInput) => {
+    const cleanHunterId = input.hunterId.trim();
+    const norm = getNormalizedIdentifier(cleanHunterId);
+
+    // Duplicate check on normalizedIdentifier across existing live records
+    const isDuplicate = liveIdentifiers.some(
+      (r) => r.normalizedIdentifier === norm || getNormalizedIdentifier(r.identifier || r.hunterId || '') === norm
+    );
+
+    if (isDuplicate) {
+      triggerToast({
+        type: 'warning',
+        title: 'Duplicate Identifier Detected',
+        message: `Hunter Identifier "${cleanHunterId}" already exists in the live database.`,
+        subtext: 'Please search and edit the existing record instead of adding a duplicate.',
+      });
+      return;
+    }
+
     const formattedDate = new Date().toISOString();
     const tempId = `manual-rec-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
     const newRecord: ManualHunterRecord = {
       id: tempId,
-      hunterId: input.hunterId,
-      name: input.name || input.hunterId,
+      hunterId: cleanHunterId,
+      name: input.name || cleanHunterId,
       bankName: input.bankName,
+      orgType: input.orgType || (input.bankName.toLowerCase().includes('bank') ? 'Bank' : 'NBFC'),
       accountNumber: input.accountNumber || '',
       mobile: input.mobile || '',
       pan: input.pan || '',
@@ -900,7 +910,14 @@ export default function App() {
       createdBy: adminSession?.name || 'Manikandan (Admin)',
       createdAt: formattedDate,
       updatedAt: formattedDate,
-      rawColumns: input.rawColumns || {},
+      rawColumns: {
+        ...(input.rawColumns || {}),
+        'Hunter Identification Number': cleanHunterId,
+        'Organisation Name': input.bankName,
+        'Bank/NBFC Name': input.bankName,
+        'Bank-NBFC': input.orgType || 'Bank',
+        'Type': input.orgType || 'Bank',
+      },
     };
 
     // Optimistic UI state update
@@ -910,12 +927,14 @@ export default function App() {
       // 1. Write to master live_identifiers collection
       await adminDirectAddLiveIdentifier(
         {
-          identifier: input.hunterId,
+          identifier: cleanHunterId,
           bankName: input.bankName,
+          organisationName: input.bankName,
+          orgType: input.orgType || 'Bank',
           details: input.remarks || input.notes || input.name || '',
           source: 'admin_direct',
           status: input.status || 'Active Reference',
-          rawColumns: input.rawColumns,
+          rawColumns: newRecord.rawColumns,
         },
         adminSession?.name || 'Administrator Manikandan'
       );
@@ -939,7 +958,7 @@ export default function App() {
     triggerToast({
       type: 'success',
       title: '✓ Hunter Identifier Added & Live',
-      message: `Record "${input.hunterId}" (${input.bankName}) saved directly to Cloud Firestore LIVE database.`,
+      message: `Record "${cleanHunterId}" (${input.bankName}) saved directly to Cloud Firestore LIVE database.`,
       subtext: 'Instantly synced across all connected public search devices',
     });
   };
@@ -977,6 +996,8 @@ export default function App() {
         {
           identifier: input.hunterId,
           bankName: input.bankName,
+          organisationName: input.bankName,
+          orgType: input.orgType || (input.bankName.toLowerCase().includes('bank') ? 'Bank' : 'NBFC'),
           details: input.remarks || input.notes || input.name || '',
           status: input.status || undefined,
         },
@@ -1035,51 +1056,6 @@ export default function App() {
       type: 'info',
       title: 'Manual Record Deleted',
       message: `Hunter Identifier "${target?.hunterId || recordId}" removed from Cloud Firestore.`,
-    });
-  };
-
-  // Step 8.1: Handle User Open Submission Modal (Requires Authentication)
-  const handleOpenUserSubmit = (initialRecord?: RecordItem, mode: 'new' | 'update' = 'new') => {
-    if (!googleUser) {
-      setPendingAuthAction({
-        type: mode === 'update' ? 'update' : 'contribute',
-        record: initialRecord || null,
-      });
-      setIsUserSubmitModalOpen(false);
-      setActivePage('login');
-      triggerToast({
-        type: 'info',
-        title: 'Authentication Required',
-        message: mode === 'update'
-          ? 'Please sign in to propose an update to this identifier. Your record is preserved.'
-          : 'Please sign in to contribute a Hunter Identifier.',
-      });
-      return;
-    }
-
-    setUserSubmitInitialRecord(initialRecord || null);
-    setUserSubmitMode(mode);
-    setIsUserSubmitModalOpen(true);
-  };
-
-  // Step 8.2: Handle User Submission Success Notification
-  const handleUserSubmissionSuccess = (
-    submissionId?: string,
-    hunterId?: string,
-    newRecord?: ManualHunterRecord
-  ) => {
-    if (newRecord) {
-      setManualRecords((prev) => {
-        if (prev.some((r) => r.id === newRecord.id)) return prev;
-        return [newRecord, ...prev];
-      });
-    }
-
-    triggerToast({
-      type: 'success',
-      title: '✓ Identifier Submitted for Admin Approval',
-      message: `Identifier "${hunterId || 'Record'}" has been submitted to the Admin Portal.`,
-      subtext: 'Accepts all alphabetic, numeric, and special character formats. Pending review by Administrator Manikandan.',
     });
   };
 

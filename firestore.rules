@@ -36,38 +36,53 @@ service cloud.firestore {
       allow create, update, delete: if isAdmin();
     }
 
-    // 2. submissions Collection (Admin management queue)
-    // Contribution is removed for normal users; strictly Admin access.
+    // 2. visitor_stats Collection (Public can read today's count; controlled increment only)
+    // Prevents arbitrary count manipulation while allowing today's counter to increment
+    match /visitor_stats/{statId} {
+      allow read: if true;
+      allow create: if isAdmin() || (
+        request.resource.data.keys().hasOnly(['id', 'date', 'visitor_count', 'visitorCount', 'created_at', 'createdAt', 'updated_at', 'updatedAt', 'timestamp', 'totalVisits', 'todayVisits', 'periodStartedAt', 'periodDateKey', 'uniqueSessions', 'lastVisit']) &&
+        (request.resource.data.visitor_count == 1 || request.resource.data.visitorCount == 1 || request.resource.data.todayVisits == 1)
+      );
+      allow update: if isAdmin() || (
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['visitor_count', 'visitorCount', 'updated_at', 'updatedAt', 'timestamp', 'todayVisits', 'totalVisits', 'lastVisit']) &&
+        (
+          request.resource.data.visitor_count == resource.data.visitor_count + 1 ||
+          request.resource.data.visitorCount == resource.data.visitorCount + 1 ||
+          request.resource.data.todayVisits == resource.data.todayVisits + 1 ||
+          request.resource.data.todayVisits == 1
+        )
+      );
+      allow delete: if isAdmin();
+    }
+
+    // 3. submissions Collection (Admin management queue)
+    // Public contribution removed; strictly Admin access.
     match /submissions/{submissionId} {
       allow read, write: if isAdmin();
     }
 
-    // 3. users Collection (Role-Based Access Control)
+    // 4. users Collection (Role-Based Access Control)
     // Authenticated admin can read their own profile or all users.
-    // Only Admin can create, update, delete.
+    // Only Admin can write.
     match /users/{userId} {
       allow get: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
       allow list: if isAdmin();
       allow write: if isAdmin();
     }
 
-    // 4. csv_metadata Collection (Dataset Metadata)
+    // 5. csv_metadata Collection (Dataset Metadata)
     match /csv_metadata/{metaId} {
       allow read, write: if isAdmin();
     }
 
-    // 5. visitor_stats Collection (Public can read metrics; only Admin can mutate)
-    match /visitor_stats/{statId} {
-      allow read: if true;
-      allow write: if isAdmin();
-    }
-
-    // 6. Auxiliary & Diagnostic Collections
-    match /connection_test/{document} {
+    // 6. manual_identifiers Collection (Admin Manual Identifier Database)
+    match /manual_identifiers/{recordId} {
       allow read, write: if isAdmin();
     }
 
-    match /visitor_stats/{statId} {
+    // 7. Auxiliary & Diagnostic Collections
+    match /connection_test/{document} {
       allow read, write: if isAdmin();
     }
 
@@ -83,19 +98,13 @@ service cloud.firestore {
       allow read, write: if isAdmin();
     }
 
-    match /manual_identifiers/{recordId} {
-      allow read, write: if isAdmin();
-    }
-
     match /csv_datasets/{datasetId} {
       allow read, write: if isAdmin();
     }
 
-    // 6. Default Catch-All: Deny access to all unknown collections
+    // Default Catch-All: Deny access to any other collections
     match /{document=**} {
       allow read, write: if false;
     }
   }
 }
-
-

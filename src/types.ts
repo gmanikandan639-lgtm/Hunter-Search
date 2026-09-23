@@ -94,6 +94,7 @@ export type ApprovalStatus = 'approved' | 'pending' | 'rejected';
 
 export type AdminTab =
   | 'overview'
+  | 'organisation-counts'
   | 'users'
   | 'approvals'
   | 'manual-records'
@@ -278,6 +279,8 @@ export interface LiveIdentifierRecord {
   identifier: string;
   normalizedIdentifier: string; // Uppercase, trimmed, sanitized key
   bankName: string;
+  organisationName?: string;
+  orgType?: 'Bank' | 'NBFC' | string;
   details: string;
   source: string;
   status: 'approved' | 'live' | 'rejected' | 'retired' | string;
