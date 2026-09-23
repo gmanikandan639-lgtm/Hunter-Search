@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { submitUserHunterRecordToFirestore } from '../lib/firebase';
 import { RecordItem, ManualHunterRecord } from '../types';
+import { maskIdentifierNumber } from '../utils/masking';
 
 export type UserOrgTypeOption = 'Bank' | 'NBFC';
 
@@ -417,7 +418,7 @@ export const UserSubmitIdentifierModal: React.FC<UserSubmitIdentifierModalProps>
                   <div>
                     <div className="font-bold">Record Already Exists in LIVE Database</div>
                     <div className="text-[11px] text-amber-800">
-                      Identifier &quot;{duplicateMatch.identifier || duplicateMatch.hunterId}&quot; is currently registered under {duplicateMatch.bankName}. You can propose an update instead.
+                      Identifier &quot;{maskIdentifierNumber(duplicateMatch.identifier || duplicateMatch.hunterId)}&quot; is currently registered under {duplicateMatch.bankName}. You can propose an update instead.
                     </div>
                   </div>
                 </div>

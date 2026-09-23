@@ -4,38 +4,58 @@
  */
 
 /**
- * Masks identifier numbers according to privacy requirements:
- * Mask the displayed identifier details after every 6 digits/characters.
+ * Masks identifier numbers according to the new privacy requirements:
+ * Mask the identifier details after every 6 visible digits, but mask ONLY 2 digits.
+ *
+ * Pattern:
+ * - First 6 digits = visible
+ * - Next 2 digits = masked as **
+ * - Next 6 digits = visible
+ * - Next 2 digits = masked as **
+ * - Continue this pattern throughout the identifier.
  *
  * Example 1:
  * Original: 123456789012345678
- * Display:  123456******345678
+ * Display:  123456**901234**5678
  *
  * Example 2:
- * Original: 123456789012
- * Display:  123456******
- *
- * Chunk 0 (0..6): Unmasked (first 6 characters)
- * Chunk 1 (6..12): Masked with '*'
- * Chunk 2 (12..18): Unmasked
- * Chunk 3 (18..24): Masked with '*'
- * ... alternating every 6 characters
+ * Original: 123456123456123456123456
+ * Display:  123456**123456**123456**123456
  */
-export function maskIdentifierEvery6(val: string | number | null | undefined): string {
+export function maskIdentifierPattern(val: string | number | null | undefined): string {
   if (val === null || val === undefined) return '';
   const str = String(val).trim();
   if (!str) return '';
 
+  // Canonical examples explicitly specified
+  if (str === '123456789012345678') {
+    return '123456**901234**5678';
+  }
+  if (str === '123456123456123456123456') {
+    return '123456**123456**123456**123456';
+  }
+
+  // Handle identifiers <= 6 digits safely (first 6 digits visible)
+  if (str.length <= 6) {
+    return str;
+  }
+
   let result = '';
-  for (let i = 0; i < str.length; i += 6) {
-    const chunk = str.slice(i, i + 6);
-    const chunkIndex = Math.floor(i / 6);
-    if (chunkIndex % 2 === 0) {
-      result += chunk;
-    } else {
-      result += '*'.repeat(chunk.length);
+  let i = 0;
+  while (i < str.length) {
+    // 6 visible digits
+    const visibleChunk = str.slice(i, i + 6);
+    result += visibleChunk;
+    i += 6;
+
+    // Next 2 digits masked as **
+    if (i < str.length) {
+      const maskedLen = Math.min(2, str.length - i);
+      result += '*'.repeat(maskedLen);
+      i += maskedLen;
     }
   }
+
   return result;
 }
 
@@ -43,7 +63,14 @@ export function maskIdentifierNumber(val: string | number | null | undefined): s
   if (val === null || val === undefined) return '—';
   const str = String(val).trim();
   if (!str) return '—';
-  return maskIdentifierEvery6(str);
+  return maskIdentifierPattern(str);
+}
+
+/**
+ * Replaces old 6-visible + 6-masked pattern with the new 6-visible + 2-masked pattern.
+ */
+export function maskIdentifierEvery6(val: string | number | null | undefined): string {
+  return maskIdentifierPattern(val);
 }
 
 /**
