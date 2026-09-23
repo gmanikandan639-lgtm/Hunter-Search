@@ -29,13 +29,10 @@ import { AboutAdminPage } from './components/AboutAdminPage';
 import { AdminLogin } from './components/AdminLogin';
 import { AdminDashboard } from './components/AdminDashboard';
 import { AddManualRecordModal, ManualRecordInput } from './components/AddManualRecordModal';
-import { UserSubmitIdentifierModal } from './components/UserSubmitIdentifierModal';
-import { UserProfileModal } from './components/UserProfileModal';
 import { ReplaceConfirmModal } from './components/ReplaceConfirmModal';
 import { ClearConfirmModal } from './components/ClearConfirmModal';
 import { ToastNotification, ToastMessage } from './components/ToastNotification';
 import { BRAND } from './assets/branding';
-import { ShieldAlert } from 'lucide-react';
 import {
   auth,
   logOut,
@@ -81,10 +78,10 @@ export default function App() {
   // Activate client-side deterrent against right-click and common inspection shortcuts
   useBrowserProtection();
 
-  const [activePage, setActivePage] = useState<ActiveNavPage>('login');
+  const [activePage, setActivePage] = useState<ActiveNavPage>('search');
   const [liveSyncStatus, setLiveSyncStatus] = useState<LiveSyncStatus>('connected');
   const [googleUser, setGoogleUser] = useState<FirebaseUser | null>(null);
-  const [isAuthChecking, setIsAuthChecking] = useState<boolean>(true);
+  const [isAuthChecking, setIsAuthChecking] = useState<boolean>(false);
   const [pendingAuthAction, setPendingAuthAction] = useState<{
     type: 'contribute' | 'update';
     record?: RecordItem | null;
@@ -104,13 +101,13 @@ export default function App() {
     return () => unsubscribeDaily();
   }, []);
 
-  // Listen to Firebase Authentication state (Mandatory for ALL users)
+  // Listen to Firebase Authentication state (Exclusively for Administrator session)
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
         setGoogleUser(user);
 
-        // Load Firestore profile to verify Admin vs Normal User role
+        // Load Firestore profile to verify Admin role
         syncUserProfileInFirestore(user)
           .then(({ isAdmin, role, name }) => {
             if (role === 'admin' || isAdmin) {
@@ -129,19 +126,15 @@ export default function App() {
               setAdminSession(null);
             }
             setIsAuthChecking(false);
-            // Default to search if on login page
-            setActivePage((prev) => (prev === 'login' ? 'search' : prev));
           })
           .catch((e) => {
             console.warn('Profile sync notice:', e);
             setIsAuthChecking(false);
-            setActivePage((prev) => (prev === 'login' ? 'search' : prev));
           });
       } else {
         setGoogleUser(null);
         setAdminSession(null);
         setIsAuthChecking(false);
-        setActivePage((prev) => (prev === 'about' ? 'about' : 'login'));
       }
     });
 
@@ -443,29 +436,10 @@ export default function App() {
     }, 5000);
   };
 
-  // Safe Navigation with Auth Guard for All Protected Pages
+  // Safe Navigation with Admin Guard
   const handleNavigatePage = (page: ActiveNavPage) => {
-    if (!googleUser && page !== 'about' && page !== 'login') {
-      triggerToast({
-        type: 'info',
-        title: 'Authentication Required',
-        message: 'Please sign in with Google or Email & Password to access Hunter Search.',
-      });
-      setActivePage('login');
-      return;
-    }
-
     if (page === 'admin') {
       if (!adminSession?.isAuthenticated) {
-        if (googleUser) {
-          triggerToast({
-            type: 'error',
-            title: 'Access Denied',
-            message: 'Admin Dashboard is restricted to authorized Administrator accounts.',
-          });
-          setActivePage('search');
-          return;
-        }
         // Unauthenticated visitor navigating to Admin Portal -> show Admin Login
         setActivePage('login');
         return;
@@ -478,23 +452,7 @@ export default function App() {
   const handleLoginSuccess = (session: AdminSession) => {
     setAdminSession(session);
     syncAdminUserRoleInFirestore(true).catch(() => {});
-
-    // Check if there was a pending contribution or update action
-    if (pendingAuthAction?.type === 'contribute') {
-      setUserSubmitInitialRecord(null);
-      setUserSubmitMode('new');
-      setIsUserSubmitModalOpen(true);
-      setPendingAuthAction(null);
-      setActivePage('search');
-    } else if (pendingAuthAction?.type === 'update') {
-      setUserSubmitInitialRecord(pendingAuthAction.record || null);
-      setUserSubmitMode('update');
-      setIsUserSubmitModalOpen(true);
-      setPendingAuthAction(null);
-      setActivePage('search');
-    } else {
-      setActivePage('admin');
-    }
+    setActivePage('admin');
 
     triggerToast({
       type: 'success',
@@ -504,36 +462,7 @@ export default function App() {
     });
   };
 
-  // Handle Standard User Login / Sign Up Success
-  const handleUserLoginSuccess = (user: any) => {
-    setGoogleUser(user);
-    setAdminSession(null);
-
-    // Check if there was a pending contribution or update action
-    if (pendingAuthAction?.type === 'contribute') {
-      setUserSubmitInitialRecord(null);
-      setUserSubmitMode('new');
-      setIsUserSubmitModalOpen(true);
-      setPendingAuthAction(null);
-      setActivePage('search');
-    } else if (pendingAuthAction?.type === 'update') {
-      setUserSubmitInitialRecord(pendingAuthAction.record || null);
-      setUserSubmitMode('update');
-      setIsUserSubmitModalOpen(true);
-      setPendingAuthAction(null);
-      setActivePage('search');
-    } else {
-      setActivePage('search');
-    }
-
-    triggerToast({
-      type: 'success',
-      title: 'Welcome to Hunter Verification',
-      message: `Signed in as ${user.displayName || user.email}.`,
-    });
-  };
-
-  // Handle User & Admin Logout (Firebase Sign-Out)
+  // Handle Admin Logout (Firebase Sign-Out)
   const handleLogout = async () => {
     try {
       await logOut();
@@ -543,15 +472,11 @@ export default function App() {
     setGoogleUser(null);
     setAdminSession(null);
     setPendingAuthAction(null);
-    setSearchQuery('');
-    setResults([]);
-    setHasSearched(false);
-    setSelectedRecord(null);
-    setActivePage('login');
+    setActivePage('search');
     triggerToast({
       type: 'info',
       title: 'Signed Out',
-      message: 'You have been logged out. Please sign in to access Hunter Verification.',
+      message: 'You have signed out from Administrator Portal.',
     });
   };
 
@@ -1451,46 +1376,6 @@ export default function App() {
     }
   };
 
-  if (isAuthChecking) {
-    return (
-      <div
-        id="auth-checking-screen"
-        className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-6 space-y-4"
-      >
-        <div className="w-14 h-14 rounded-2xl bg-indigo-950/80 border border-indigo-700/60 p-2 flex items-center justify-center shadow-lg shadow-indigo-950/50 animate-pulse">
-          <img
-            src={BRAND.shieldIcon}
-            alt="Fraud Risk Hub"
-            className="w-full h-full object-cover rounded-xl"
-            referrerPolicy="no-referrer"
-          />
-        </div>
-        <div className="text-center space-y-1">
-          <h2 className="text-base font-extrabold tracking-tight text-slate-100">
-            Hunter Verification Hub
-          </h2>
-          <p className="text-xs text-slate-400 font-medium">
-            Verifying secure session...
-          </p>
-        </div>
-        <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
-  }
-
-  const pendingNotice = pendingAuthAction
-    ? pendingAuthAction.type === 'update'
-      ? {
-          title: 'Authentication Required to Propose Update',
-          description: `Please sign in with Google or Email & Password to propose an update to identifier "${pendingAuthAction.record?.hunterId || 'selected identifier'}". Your record details are preserved.`,
-        }
-      : {
-          title: 'Authentication Required to Contribute',
-          description:
-            'Please sign in with Google or Email & Password to contribute a new Hunter Identifier. You will be redirected right to the contribution form.',
-        }
-    : null;
-
   return (
     <div
       id="app-root"
@@ -1503,13 +1388,10 @@ export default function App() {
         recordCount={combinedRecords.length}
         isDemoData={csvMetadata.isDemo}
         adminSession={adminSession}
-        googleUser={googleUser}
         onLogout={handleLogout}
         visitorStats={visitorStats}
         liveSyncStatus={liveSyncStatus}
         pendingApprovalsCount={pendingApprovalsCount}
-        onOpenUserSubmit={() => handleOpenUserSubmit()}
-        onOpenProfile={() => setIsProfileModalOpen(true)}
       />
 
       {/* Main Content Container */}
@@ -1517,100 +1399,71 @@ export default function App() {
         id="main-content-container"
         className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6"
       >
-        {/* UNAUTHENTICATED USERS: SHOW LOGIN PAGE (CASE 1 / CASE 3 / CASE 4) */}
-        {!googleUser && activePage !== 'about' ? (
+        {/* VIEW 1: PUBLIC HUNTER SEARCH (DIRECTLY ACCESSIBLE WITHOUT LOGIN) */}
+        {activePage === 'search' && (
+          <div
+            id="hunter-search-page-layout"
+            className="flex flex-col lg:flex-row items-start gap-6"
+          >
+            {/* LEFT SIDE – 40% (HUNTER SEARCH) */}
+            <div className="w-full lg:w-[40%] shrink-0 lg:sticky lg:top-24">
+              <SearchPanel
+                csvMetadata={effectiveMetadata}
+                uniqueBanks={combinedUniqueBanks}
+                searchQuery={searchQuery}
+                setSearchQuery={setSearchQuery}
+                onExecuteSearch={handleExecuteSearch}
+                filters={filters}
+                setFilters={setFilters}
+                isSearching={isSearching}
+                onRemapColumns={handleRemapColumns}
+                adminSession={adminSession}
+                onOpenAddManualRecord={() => setIsAddManualRecordModalOpen(true)}
+              />
+            </div>
+
+            {/* RIGHT SIDE – 60% (HUNTER MATCH RESULTS) */}
+            <div className="w-full lg:w-[60%] flex-1 min-w-0">
+              <ResultsPanel
+                results={results}
+                hasSearched={hasSearched}
+                searchQuery={searchQuery}
+                isSearching={isSearching}
+                csvMetadata={effectiveMetadata}
+                threshold={filters.threshold}
+                isAdmin={Boolean(adminSession?.isAuthenticated)}
+                onSelectRecord={(record, score, matchedFields) =>
+                  setSelectedRecord({ record, score, matchedFields })
+                }
+              />
+            </div>
+          </div>
+        )}
+
+        {/* VIEW 2: ABOUT PAGE */}
+        {activePage === 'about' && (
+          <AboutAdminPage
+            csvMetadata={effectiveMetadata}
+            adminSession={adminSession}
+            onNavigateToSearch={() => setActivePage('search')}
+            onNavigateToAdmin={() => handleNavigatePage('admin')}
+            onNavigateToLogin={() => setActivePage('login')}
+          />
+        )}
+
+        {/* VIEW 3: ADMINISTRATOR LOGIN */}
+        {activePage === 'login' && (
           <div className="flex justify-center p-2 sm:p-6">
             <AdminLogin
               onLoginSuccess={handleLoginSuccess}
-              onUserLoginSuccess={handleUserLoginSuccess}
-              pendingNotice={pendingNotice}
+              onCancel={() => setActivePage('search')}
             />
           </div>
-        ) : (
-          <>
-            {/* VIEW 1: PUBLIC HUNTER SEARCH (AVAILABLE AFTER AUTHENTICATION) */}
-            {activePage === 'search' && (
-              <div
-                id="hunter-search-page-layout"
-                className="flex flex-col lg:flex-row items-start gap-6"
-              >
-                {/* LEFT SIDE – 40% (HUNTER SEARCH) */}
-                <div className="w-full lg:w-[40%] shrink-0 lg:sticky lg:top-24">
-                  <SearchPanel
-                    csvMetadata={effectiveMetadata}
-                    uniqueBanks={combinedUniqueBanks}
-                    searchQuery={searchQuery}
-                    setSearchQuery={setSearchQuery}
-                    onExecuteSearch={handleExecuteSearch}
-                    filters={filters}
-                    setFilters={setFilters}
-                    isSearching={isSearching}
-                    onRemapColumns={handleRemapColumns}
-                    adminSession={adminSession}
-                    currentUser={googleUser}
-                    onOpenAddManualRecord={() => setIsAddManualRecordModalOpen(true)}
-                    onOpenUserSubmit={() => handleOpenUserSubmit()}
-                  />
-                </div>
-
-                {/* RIGHT SIDE – 60% (HUNTER MATCH RESULTS) */}
-                <div className="w-full lg:w-[60%] flex-1 min-w-0">
-                  <ResultsPanel
-                    results={results}
-                    hasSearched={hasSearched}
-                    searchQuery={searchQuery}
-                    isSearching={isSearching}
-                    csvMetadata={effectiveMetadata}
-                    threshold={filters.threshold}
-                    isAdmin={Boolean(adminSession?.isAuthenticated)}
-                    onSelectRecord={(record, score, matchedFields) =>
-                      setSelectedRecord({ record, score, matchedFields })
-                    }
-                    onProposeUpdate={(rec) => handleOpenUserSubmit(rec, 'update')}
-                    onOpenUserSubmit={() => handleOpenUserSubmit()}
-                  />
-                </div>
-              </div>
-            )}
-
-            {/* VIEW 2: ABOUT PAGE */}
-            {activePage === 'about' && (
-              <AboutAdminPage
-                csvMetadata={effectiveMetadata}
-                adminSession={adminSession}
-                onNavigateToSearch={() => setActivePage('search')}
-                onNavigateToAdmin={() => handleNavigatePage('admin')}
-                onNavigateToLogin={() => setActivePage('login')}
-              />
-            )}
-
-            {/* VIEW 3: LOGIN / AUTHENTICATION PAGE */}
-            {activePage === 'login' && (
-              <div className="max-w-md mx-auto py-16 text-center space-y-4 bg-white rounded-2xl border border-slate-200 p-8 shadow-xs">
-                <h3 className="text-base font-bold text-slate-900">Already Authenticated</h3>
-                <p className="text-xs text-slate-500">
-                  You are currently signed in as {googleUser?.displayName || googleUser?.email}.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setActivePage('search')}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-xs cursor-pointer transition-colors"
-                >
-                  Go to Hunter Search
-                </button>
-              </div>
-            )}
-          </>
         )}
 
         {/* VIEW 4: ADMIN DASHBOARD (PROTECTED) */}
         {activePage === 'admin' && (
-          isAuthChecking ? (
-            <div className="py-20 flex flex-col items-center justify-center gap-3">
-              <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
-              <p className="text-xs font-bold text-slate-600">Verifying administrator session...</p>
-            </div>
-          ) : adminSession?.isAuthenticated ? (
+          adminSession?.isAuthenticated ? (
             <AdminDashboard
               adminSession={adminSession}
               csvMetadata={csvMetadata}
@@ -1644,29 +1497,12 @@ export default function App() {
               onTriggerToast={triggerToast}
               currentAdminEmail={googleUser?.email || adminSession?.username}
             />
-          ) : !googleUser ? (
+          ) : (
             <div className="flex justify-center p-4 sm:p-6">
               <AdminLogin
                 onLoginSuccess={handleLoginSuccess}
-                onUserLoginSuccess={handleUserLoginSuccess}
+                onCancel={() => setActivePage('search')}
               />
-            </div>
-          ) : (
-            <div className="max-w-md mx-auto py-16 text-center space-y-4 bg-white rounded-2xl border border-slate-200 p-8 shadow-xs">
-              <div className="w-12 h-12 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-center mx-auto text-amber-600">
-                <ShieldAlert className="w-6 h-6" />
-              </div>
-              <h3 className="text-base font-bold text-slate-900">Administrator Privileges Required</h3>
-              <p className="text-xs text-slate-500">
-                Your account ({googleUser?.email}) is logged in with standard user permissions. The Admin Dashboard is restricted to administrators.
-              </p>
-              <button
-                type="button"
-                onClick={() => setActivePage('search')}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-xs cursor-pointer transition-colors"
-              >
-                Return to Hunter Search
-              </button>
             </div>
           )
         )}
@@ -1708,7 +1544,6 @@ export default function App() {
           matchedFields={selectedRecord.matchedFields}
           isAdmin={Boolean(adminSession?.isAuthenticated)}
           onClose={() => setSelectedRecord(null)}
-          onProposeUpdate={(rec) => handleOpenUserSubmit(rec, 'update')}
         />
       )}
 
@@ -1722,51 +1557,6 @@ export default function App() {
         }}
         uniqueBanks={combinedUniqueBanks}
         currentHeaders={effectiveMetadata.headers}
-      />
-
-      {/* Front-End User Hunter Identifier Submission / Proposal Modal */}
-      <UserSubmitIdentifierModal
-        isOpen={isUserSubmitModalOpen}
-        onClose={() => setIsUserSubmitModalOpen(false)}
-        onSubmitSuccess={handleUserSubmissionSuccess}
-        uniqueBanks={combinedUniqueBanks}
-        initialRecord={userSubmitInitialRecord}
-        mode={userSubmitMode}
-        currentUser={googleUser}
-        isAdmin={Boolean(adminSession?.isAuthenticated)}
-        liveIdentifiers={liveIdentifiers}
-        onRequireLogin={({ initialRecord, mode }) => {
-          setPendingAuthAction({
-            type: mode === 'update' ? 'update' : 'contribute',
-            record: initialRecord || null,
-          });
-          setIsUserSubmitModalOpen(false);
-          setActivePage('login');
-          triggerToast({
-            type: 'info',
-            title: 'Authentication Required',
-            message:
-              mode === 'update'
-                ? 'Please sign in to submit an update proposal. Your record is preserved.'
-                : 'Please sign in to contribute a Hunter Identifier.',
-          });
-        }}
-      />
-
-      {/* User Account Profile & Role Modal */}
-      <UserProfileModal
-        isOpen={isProfileModalOpen}
-        onClose={() => setIsProfileModalOpen(false)}
-        currentUser={googleUser}
-        userRole={adminSession?.isAuthenticated ? 'admin' : 'user'}
-        userSubmissions={manualRecords}
-        onLogout={handleLogout}
-        onOpenSubmitNew={() => handleOpenUserSubmit()}
-        onProfileUpdated={(newName) => {
-          if (adminSession) {
-            setAdminSession({ ...adminSession, name: newName });
-          }
-        }}
       />
 
       {/* Global Toast Notification */}

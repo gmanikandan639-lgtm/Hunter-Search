@@ -9,16 +9,9 @@ import { BRAND } from '../assets/branding';
 import {
   Search,
   Info,
-  CheckCircle,
   LogOut,
   Lock,
   LayoutDashboard,
-  Users,
-  PlusCircle,
-  Clock,
-  ShieldAlert,
-  User,
-  ShieldCheck,
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -31,7 +24,6 @@ interface HeaderProps {
   onLogout: () => void;
   visitorStats?: VisitorStats;
   liveSyncStatus?: LiveSyncStatus;
-  onOpenUserSubmit?: () => void;
   pendingApprovalsCount?: number;
   onOpenProfile?: () => void;
 }
@@ -44,11 +36,10 @@ export const Header: React.FC<HeaderProps> = ({
   onLogout,
   visitorStats,
   liveSyncStatus = 'connected',
-  onOpenUserSubmit,
   pendingApprovalsCount = 0,
   onOpenProfile,
 }) => {
-  const isAuthPage = activePage === 'login' || (!googleUser && !adminSession?.isAuthenticated);
+  const isAuthPage = activePage === 'login';
 
   return (
     <header
@@ -61,14 +52,8 @@ export const Header: React.FC<HeaderProps> = ({
           <div className="flex items-center gap-6">
             <button
               id="brand-logo-btn"
-              onClick={() => {
-                if (!isAuthPage) {
-                  onSelectPage('search');
-                }
-              }}
-              className={`flex items-center gap-3 group text-left focus:outline-hidden ${
-                isAuthPage ? 'cursor-default' : 'cursor-pointer'
-              }`}
+              onClick={() => onSelectPage('search')}
+              className="flex items-center gap-3 group text-left focus:outline-hidden cursor-pointer"
             >
               <div className="relative w-11 h-11 rounded-xl overflow-hidden bg-slate-950 border border-slate-800 shadow-md shadow-indigo-950/30 shrink-0 group-hover:scale-105 transition-transform">
                 <img
@@ -94,51 +79,38 @@ export const Header: React.FC<HeaderProps> = ({
               </div>
             </button>
 
-            {/* Desktop Navigation Links - Hidden on Login page to prevent bypassing authentication */}
-            {!isAuthPage && (
-              <nav className="hidden md:flex items-center gap-1 ml-4 pl-4 border-l border-slate-200">
-                <button
-                  id="desktop-nav-search"
-                  onClick={() => onSelectPage('search')}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
-                    activePage === 'search'
-                      ? 'bg-indigo-50 text-indigo-700 border border-indigo-200/60'
-                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-                  }`}
-                >
-                  <Search className="w-3.5 h-3.5" />
-                  <span>Hunter Search</span>
-                </button>
-                <button
-                  id="desktop-nav-about"
-                  onClick={() => onSelectPage('about')}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
-                    activePage === 'about'
-                      ? 'bg-indigo-50 text-indigo-700 border border-indigo-200/60'
-                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-                  }`}
-                >
-                  <Info className="w-3.5 h-3.5" />
-                  <span>About Hub</span>
-                </button>
-                {onOpenUserSubmit && (
-                  <button
-                    id="desktop-nav-contribute"
-                    onClick={onOpenUserSubmit}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-indigo-700 bg-indigo-50/70 hover:bg-indigo-100 hover:text-indigo-900 border border-indigo-200/60 transition-colors cursor-pointer"
-                    title="Contribute Hunter Identifier"
-                  >
-                    <PlusCircle className="w-3.5 h-3.5 text-indigo-600" />
-                    <span>Contribute</span>
-                  </button>
-                )}
-              </nav>
-            )}
+            {/* Desktop Navigation Links */}
+            <nav className="hidden md:flex items-center gap-1 ml-4 pl-4 border-l border-slate-200">
+              <button
+                id="desktop-nav-search"
+                onClick={() => onSelectPage('search')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                  activePage === 'search'
+                    ? 'bg-indigo-50 text-indigo-700 border border-indigo-200/60'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                }`}
+              >
+                <Search className="w-3.5 h-3.5" />
+                <span>Hunter Search</span>
+              </button>
+              <button
+                id="desktop-nav-about"
+                onClick={() => onSelectPage('about')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                  activePage === 'about'
+                    ? 'bg-indigo-50 text-indigo-700 border border-indigo-200/60'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                }`}
+              >
+                <Info className="w-3.5 h-3.5" />
+                <span>About Hub</span>
+              </button>
+            </nav>
           </div>
 
           {/* Right: Visitor Counter & Admin session info */}
           <div className="flex items-center gap-2.5 sm:gap-3">
-            {/* Admin Session or Admin Login Button */}
+            {/* Admin Session or Admin Portal Button */}
             {adminSession?.isAuthenticated ? (
               <div className="flex items-center gap-2">
                 <button
@@ -209,94 +181,8 @@ export const Header: React.FC<HeaderProps> = ({
                   <span className="hidden sm:inline">Logout</span>
                 </button>
               </div>
-            ) : googleUser ? (
-              <div className="flex items-center gap-2">
-                {onOpenProfile ? (
-                  <button
-                    type="button"
-                    onClick={onOpenProfile}
-                    id="header-user-profile-btn"
-                    className="flex items-center gap-2 px-2.5 py-1 rounded-xl bg-slate-50 hover:bg-indigo-50/70 border border-slate-200 hover:border-indigo-200 text-left transition-colors cursor-pointer"
-                    title={`Signed in as: ${googleUser.displayName || googleUser.email} - Click to view profile`}
-                  >
-                    {googleUser.photoURL ? (
-                      <img
-                        src={googleUser.photoURL}
-                        alt={googleUser.displayName || 'User'}
-                        className="w-6 h-6 rounded-full object-cover border border-slate-200"
-                        referrerPolicy="no-referrer"
-                      />
-                    ) : (
-                      <div className="w-6 h-6 rounded-full bg-indigo-600 flex items-center justify-center text-white text-[10px] font-bold">
-                        {(googleUser.displayName || googleUser.email || 'U')[0].toUpperCase()}
-                      </div>
-                    )}
-                    <div className="hidden sm:block">
-                      <span className="text-xs font-bold text-slate-900 block leading-tight max-w-[120px] truncate">
-                        {googleUser.displayName || googleUser.email?.split('@')[0]}
-                      </span>
-                      <span className="text-[9px] font-semibold text-indigo-600 uppercase tracking-wider block">
-                        My Profile
-                      </span>
-                    </div>
-                  </button>
-                ) : (
-                  <div
-                    className="flex items-center gap-2 px-2.5 py-1 rounded-xl bg-slate-50 border border-slate-200 text-left"
-                    title={`Signed in as: ${googleUser.displayName || googleUser.email}`}
-                  >
-                    {googleUser.photoURL ? (
-                      <img
-                        src={googleUser.photoURL}
-                        alt={googleUser.displayName || 'User'}
-                        className="w-6 h-6 rounded-full object-cover border border-slate-200"
-                        referrerPolicy="no-referrer"
-                      />
-                    ) : (
-                      <div className="w-6 h-6 rounded-full bg-indigo-600 flex items-center justify-center text-white text-[10px] font-bold">
-                        {(googleUser.displayName || googleUser.email || 'U')[0].toUpperCase()}
-                      </div>
-                    )}
-                    <div className="hidden sm:block">
-                      <span className="text-xs font-bold text-slate-900 block leading-tight max-w-[120px] truncate">
-                        {googleUser.displayName || googleUser.email?.split('@')[0]}
-                      </span>
-                      <span className="text-[9px] font-semibold text-slate-500 uppercase tracking-wider block">
-                        User Auth
-                      </span>
-                    </div>
-                  </div>
-                )}
-
-                <button
-                  id="header-logout-btn"
-                  onClick={onLogout}
-                  className="flex items-center gap-1.5 py-1.5 px-3 rounded-xl bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-600 border border-slate-200 hover:border-rose-200 text-xs font-bold transition-colors cursor-pointer"
-                  title="Sign Out"
-                >
-                  <LogOut className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Logout</span>
-                </button>
-              </div>
-            ) : isAuthPage ? (
-              <div className="flex items-center gap-2">
-                <div className="flex items-center gap-1.5 py-1.5 px-3 rounded-xl bg-slate-100 border border-slate-200 text-xs font-semibold text-slate-700">
-                  <ShieldCheck className="w-3.5 h-3.5 text-indigo-600" />
-                  <span>Secure Access</span>
-                </div>
-              </div>
             ) : (
               <div className="flex items-center gap-2">
-                <button
-                  id="header-user-login-btn"
-                  onClick={() => onSelectPage('login')}
-                  className="flex items-center gap-1.5 py-1.5 px-3 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/80 text-xs font-bold transition-colors cursor-pointer"
-                  title="Sign In or Register an Account"
-                >
-                  <User className="w-3.5 h-3.5 text-indigo-600" />
-                  <span className="hidden sm:inline">Sign In / Register</span>
-                  <span className="sm:hidden">Sign In</span>
-                </button>
                 <button
                   id="header-login-btn"
                   onClick={() => onSelectPage('admin')}
@@ -311,54 +197,34 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
 
-        {/* Mobile Navigation Row - Hidden on Login page */}
-        {!isAuthPage && (
-          <div className="flex md:hidden items-center justify-around py-2 border-t border-slate-100 overflow-x-auto gap-1">
-            <button
-              id="mobile-nav-search"
-              onClick={() => onSelectPage('search')}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap ${
-                activePage === 'search'
-                  ? 'bg-indigo-50 text-indigo-700 font-bold'
-                  : 'text-slate-600'
-              }`}
-            >
-              <Search className="w-3.5 h-3.5" />
-              <span>Search</span>
-            </button>
-            <button
-              id="mobile-nav-about"
-              onClick={() => onSelectPage('about')}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap ${
-                activePage === 'about'
-                  ? 'bg-indigo-50 text-indigo-700 font-bold'
-                  : 'text-slate-600'
-              }`}
-            >
-              <Info className="w-3.5 h-3.5" />
-              <span>About</span>
-            </button>
-            {onOpenUserSubmit && (
-              <button
-                id="mobile-nav-contribute"
-                onClick={onOpenUserSubmit}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap text-indigo-700 bg-indigo-50/80 cursor-pointer"
-              >
-                <PlusCircle className="w-3.5 h-3.5 text-indigo-600" />
-                <span>Contribute</span>
-              </button>
-            )}
-            {!adminSession?.isAuthenticated && !googleUser && (
-              <button
-                id="mobile-nav-user-login"
-                onClick={() => onSelectPage('login')}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap text-slate-700 bg-slate-100 cursor-pointer"
-              >
-                <User className="w-3.5 h-3.5 text-slate-600" />
-                <span>Sign In</span>
-              </button>
-            )}
-            {adminSession?.isAuthenticated ? (
+        {/* Mobile Navigation Row */}
+        <div className="flex md:hidden items-center justify-around py-2 border-t border-slate-100 overflow-x-auto gap-1">
+          <button
+            id="mobile-nav-search"
+            onClick={() => onSelectPage('search')}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap ${
+              activePage === 'search'
+                ? 'bg-indigo-50 text-indigo-700 font-bold'
+                : 'text-slate-600'
+            }`}
+          >
+            <Search className="w-3.5 h-3.5" />
+            <span>Search</span>
+          </button>
+          <button
+            id="mobile-nav-about"
+            onClick={() => onSelectPage('about')}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap ${
+              activePage === 'about'
+                ? 'bg-indigo-50 text-indigo-700 font-bold'
+                : 'text-slate-600'
+            }`}
+          >
+            <Info className="w-3.5 h-3.5" />
+            <span>About</span>
+          </button>
+          {adminSession?.isAuthenticated ? (
+            <>
               <button
                 id="mobile-nav-admin"
                 onClick={() => onSelectPage('admin')}
@@ -374,18 +240,6 @@ export const Header: React.FC<HeaderProps> = ({
                   <span className="w-2 h-2 rounded-full bg-amber-400"></span>
                 )}
               </button>
-            ) : null}
-            {(googleUser || adminSession?.isAuthenticated) && onOpenProfile && (
-              <button
-                id="mobile-nav-profile"
-                onClick={onOpenProfile}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap text-indigo-700 bg-indigo-50/80 cursor-pointer"
-              >
-                <User className="w-3.5 h-3.5" />
-                <span>Profile</span>
-              </button>
-            )}
-            {(googleUser || adminSession?.isAuthenticated) && (
               <button
                 id="mobile-nav-logout"
                 onClick={onLogout}
@@ -394,9 +248,18 @@ export const Header: React.FC<HeaderProps> = ({
                 <LogOut className="w-3.5 h-3.5" />
                 <span>Logout</span>
               </button>
-            )}
-          </div>
-        )}
+            </>
+          ) : (
+            <button
+              id="mobile-nav-admin-login"
+              onClick={() => onSelectPage('admin')}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap text-slate-800 bg-slate-100 cursor-pointer"
+            >
+              <Lock className="w-3.5 h-3.5 text-slate-700" />
+              <span>Admin Portal</span>
+            </button>
+          )}
+        </div>
       </div>
     </header>
   );

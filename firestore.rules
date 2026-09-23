@@ -28,59 +28,27 @@ service cloud.firestore {
     }
 
     // 1. live_identifiers Collection (Master Searchable Database)
-    // Authenticated users can read live identifiers.
-    // Admin: Can manage live_identifiers (READ, CREATE, UPDATE, DELETE).
-    // Normal users MUST NOT directly modify live_identifiers.
+    // Normal/public users may READ/search the LIVE identifier data directly without login.
+    // Only authenticated Admin users with role = "admin" may CREATE, UPDATE, DELETE.
+    // Public writes are strictly forbidden.
     match /live_identifiers/{recordId} {
-      allow read: if isAuthenticated();
+      allow read: if true;
       allow create, update, delete: if isAdmin();
     }
 
-    // 2. submissions Collection (User Contributions & Proposed Updates)
-    // Authenticated normal users:
-    // - MUST authenticate before submitting (request.auth != null)
-    // - Can CREATE pending submissions with strict validation (required identifier & bankName, pending status, submittedBy matching auth.uid, no admin fields).
-    // - Authenticated users can READ their own submissions.
-    // - Normal users cannot approve, reject, update, or delete submissions.
-    // Admin: Can read all, approve/reject (update), create, delete.
+    // 2. submissions Collection (Admin management queue)
+    // Contribution is removed for normal users; strictly Admin access.
     match /submissions/{submissionId} {
-      allow read: if isAdmin() || (isAuthenticated() && resource.data.submittedBy == request.auth.uid);
-      allow create: if isAuthenticated() && (
-        request.resource.data.identifier is string &&
-        request.resource.data.identifier.size() > 0 &&
-        request.resource.data.identifier.size() <= 200 &&
-        request.resource.data.bankName is string &&
-        request.resource.data.bankName.size() > 0 &&
-        request.resource.data.bankName.size() <= 200 &&
-        request.resource.data.status == 'pending' &&
-        request.resource.data.submittedBy == request.auth.uid &&
-        !('approvedBy' in request.resource.data) &&
-        !('approvedAt' in request.resource.data) &&
-        !('rejectionReason' in request.resource.data) &&
-        !('reviewedBy' in request.resource.data) &&
-        !('reviewedAt' in request.resource.data)
-      );
-      allow update, delete: if isAdmin();
+      allow read, write: if isAdmin();
     }
 
     // 3. users Collection (Role-Based Access Control)
-    // Public unauthenticated access: DENIED.
-    // Authenticated user can read their own profile (get); Admin can read/list all users.
-    // Authenticated user can create their initial profile as 'user' (never 'admin'); Admin can create any.
-    // Authenticated user can update their profile fields, but CANNOT modify 'role'; Admin can update any.
-    // Only Admin can delete users.
+    // Authenticated admin can read their own profile or all users.
+    // Only Admin can create, update, delete.
     match /users/{userId} {
       allow get: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
       allow list: if isAdmin();
-      allow create: if isAuthenticated() && (
-        (request.auth.uid == userId && (!('role' in request.resource.data) || request.resource.data.role == 'user')) ||
-        isAdmin()
-      );
-      allow update: if isAuthenticated() && (
-        (request.auth.uid == userId && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['role']))) ||
-        isAdmin()
-      );
-      allow delete: if isAdmin();
+      allow write: if isAdmin();
     }
 
     // 4. csv_metadata Collection (Dataset Metadata)
@@ -88,7 +56,13 @@ service cloud.firestore {
       allow read, write: if isAdmin();
     }
 
-    // 5. Auxiliary & Diagnostic Collections
+    // 5. visitor_stats Collection (Public can read metrics; only Admin can mutate)
+    match /visitor_stats/{statId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // 6. Auxiliary & Diagnostic Collections
     match /connection_test/{document} {
       allow read, write: if isAdmin();
     }

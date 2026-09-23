@@ -18,8 +18,7 @@ import {
   AlertTriangle,
   ShieldCheck,
   FileSearch,
-  PlusCircle,
-  Edit3,
+  ChevronRight,
 } from 'lucide-react';
 
 interface ResultsPanelProps {
@@ -31,8 +30,6 @@ interface ResultsPanelProps {
   threshold: number;
   isAdmin?: boolean;
   onSelectRecord: (record: RecordItem, score: number, matchedFields: any[]) => void;
-  onProposeUpdate?: (record: RecordItem) => void;
-  onOpenUserSubmit?: () => void;
 }
 
 export const ResultsPanel: React.FC<ResultsPanelProps> = ({
@@ -44,8 +41,6 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
   threshold,
   isAdmin = false,
   onSelectRecord,
-  onProposeUpdate,
-  onOpenUserSubmit,
 }) => {
   const [confidenceFilter, setConfidenceFilter] = useState<'ALL' | 'VERY_HIGH' | 'HIGH' | 'POSSIBLE'>('ALL');
   const [sortBy, setSortBy] = useState<'SCORE_DESC' | 'BANK_NAME' | 'REC_ID'>('SCORE_DESC');
@@ -213,7 +208,7 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
             </div>
           )}
 
-          {/* 3. Empty Search Bar / Initial Contribution State */}
+          {/* 3. Empty Search Bar / Initial Verification State */}
           {hasActiveDatabase && !isSearching && !isQueryActive && (
             <div id="state-empty-initial" className="p-8 sm:p-12 text-center space-y-4">
               <div className="w-14 h-14 rounded-2xl bg-indigo-50 border border-indigo-100 text-indigo-600 flex items-center justify-center mx-auto shadow-xs">
@@ -221,29 +216,15 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
               </div>
               <div className="max-w-md mx-auto space-y-2">
                 <p
-                  id="hunter-initial-contribution-message"
+                  id="hunter-initial-instruction-message"
                   className="text-sm sm:text-base font-bold text-slate-800 leading-relaxed"
                 >
-                  Your contribution can help others. You can also contribute an identifier to help other users.
+                  Enter an identifier or reference number to verify.
                 </p>
                 <p className="text-xs text-slate-500">
                   Type any numbers, letters, or identifier details in the search bar on the left to search in real time.
                 </p>
               </div>
-
-              {onOpenUserSubmit && (
-                <div className="pt-2 flex justify-center">
-                  <button
-                    id="initial-contribute-identifier-btn"
-                    type="button"
-                    onClick={onOpenUserSubmit}
-                    className="py-2.5 px-4.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-bold text-xs tracking-wide shadow-md shadow-indigo-600/20 transition-all flex items-center gap-2 cursor-pointer"
-                  >
-                    <PlusCircle className="w-4 h-4" />
-                    <span>Contribute Hunter Identifier</span>
-                  </button>
-                </div>
-              )}
             </div>
           )}
 
@@ -276,7 +257,7 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
                         <span>Bank Name</span>
                       </div>
                     </th>
-                    <th className="py-3 px-4 text-right">Action</th>
+                    <th className="py-3 px-4 text-right">Details</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
@@ -335,20 +316,20 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
                           </div>
                         </td>
 
-                        {/* Visible: Action (Update) */}
+                        {/* Action: View Details */}
                         <td className="py-3.5 px-4 align-top text-right">
                           <button
-                            id={`row-update-btn-${idx}`}
+                            id={`row-view-btn-${idx}`}
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
-                              if (onProposeUpdate) onProposeUpdate(item.record);
+                              onSelectRecord(item.record, item.score, item.matchedFields);
                             }}
                             className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-indigo-700 bg-indigo-50 hover:bg-indigo-100 active:bg-indigo-200 border border-indigo-200 text-xs font-bold transition-colors cursor-pointer"
-                            title="Propose update for this identifier"
+                            title="View identifier details"
                           >
-                            <Edit3 className="w-3 h-3" />
-                            <span>Update</span>
+                            <span>View</span>
+                            <ChevronRight className="w-3 h-3 text-indigo-500" />
                           </button>
                         </td>
                       </tr>

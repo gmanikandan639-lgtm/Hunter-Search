@@ -17,7 +17,6 @@ import {
   AlertCircle,
   PlusCircle,
 } from 'lucide-react';
-import { auth } from '../lib/firebase';
 
 interface SearchPanelProps {
   csvMetadata: CSVMetadata;
@@ -30,9 +29,7 @@ interface SearchPanelProps {
   isSearching: boolean;
   onRemapColumns?: (nameCol: string, bankCol: string) => void;
   adminSession?: AdminSession | null;
-  currentUser?: any;
   onOpenAddManualRecord?: () => void;
-  onOpenUserSubmit?: () => void;
 }
 
 export const SearchPanel: React.FC<SearchPanelProps> = ({
@@ -42,22 +39,12 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({
   onExecuteSearch,
   isSearching,
   adminSession,
-  currentUser,
   onOpenAddManualRecord,
-  onOpenUserSubmit,
 }) => {
   const [validationError, setValidationError] = useState<string | null>(null);
   const [isFocused, setIsFocused] = useState<boolean>(false);
   const [isTyping, setIsTyping] = useState<boolean>(false);
-  const [firebaseUser, setFirebaseUser] = useState<any>(currentUser || auth.currentUser);
   const typingTimerRef = React.useRef<any>(null);
-
-  useEffect(() => {
-    const unsub = auth.onAuthStateChanged((user) => {
-      setFirebaseUser(user);
-    });
-    return () => unsub();
-  }, []);
 
   const hasActiveData = csvMetadata.status === 'ACTIVE' && csvMetadata.recordCount > 0;
 
@@ -73,10 +60,8 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({
     }, 1500);
   };
 
-  // Running animated border is active when a logged-in user is typing, focusing on the search bar, or searching
-  const isLoggedIn = Boolean(adminSession?.isAuthenticated || currentUser || firebaseUser || auth.currentUser);
-  const isActivelyUsing = isSearching || isTyping || isFocused;
-  const isRunningBorderActive = isLoggedIn && isActivelyUsing;
+  // Running animated border is active when typing, focusing on search bar, or searching
+  const isRunningBorderActive = isSearching || isTyping || isFocused;
 
   const handleSearchSubmit = (e?: React.FormEvent) => {
     if (e) {
@@ -263,19 +248,6 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({
               )}
             </button>
 
-            {onOpenUserSubmit && (
-              <button
-                id="hunter-search-contribute-btn"
-                type="button"
-                onClick={onOpenUserSubmit}
-                className="py-3 px-3.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 active:bg-indigo-200 text-indigo-700 font-extrabold text-xs border border-indigo-200/80 transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs"
-                title="Contribute new Hunter Identifier records. Reviewed by Admins before going live."
-              >
-                <PlusCircle className="w-4 h-4 text-indigo-600" />
-                <span>+ Contribute Hunter Identifier</span>
-              </button>
-            )}
-
             <button
               id="reset-search-btn"
               type="button"
@@ -314,36 +286,6 @@ export const SearchPanel: React.FC<SearchPanelProps> = ({
             ))}
           </div>
         </div>
-
-        {/* Public Contribution & Identifier Submission Card */}
-        {onOpenUserSubmit && (
-          <div className="pt-3 border-t border-slate-100">
-            <div className="p-3.5 rounded-2xl bg-gradient-to-br from-indigo-50/90 via-blue-50/70 to-slate-50 border border-indigo-100 shadow-2xs flex items-center justify-between gap-3">
-              <div>
-                <div className="flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-indigo-600"></span>
-                  <p className="text-xs font-extrabold text-slate-900">
-                    Contribute Hunter Identifier
-                  </p>
-                </div>
-                <p className="text-[11px] text-slate-500 mt-0.5 leading-tight">
-                  Add new records or propose updates. Reviewed by Admins before going live.
-                </p>
-              </div>
-
-              <button
-                id="search-panel-contribute-btn"
-                type="button"
-                onClick={onOpenUserSubmit}
-                className="shrink-0 py-2 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs shadow-xs hover:shadow-md transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
-                title="Add or update a Hunter Identifier for review"
-              >
-                <PlusCircle className="w-3.5 h-3.5" />
-                <span>Submit</span>
-              </button>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );
