@@ -65,6 +65,7 @@ import {
   adminDirectAddLiveIdentifier,
   adminDirectUpdateLiveIdentifier,
   adminDirectDeleteLiveIdentifier,
+  adminBulkDeleteLiveIdentifiers,
   downloadLiveIdentifiersAsCSV,
   exportLiveIdentifiersDirectFromFirestore,
   seedLiveIdentifiersIfEmpty,
@@ -1059,6 +1060,27 @@ export default function App() {
     });
   };
 
+  // Handle Admin Bulk Deletion of Selected Identifiers
+  const handleBulkDeleteIdentifiers = async (recordIds: string[]): Promise<number> => {
+    if (!recordIds || recordIds.length === 0) return 0;
+    const count = recordIds.length;
+    const idSet = new Set(recordIds);
+
+    // Optimistic UI update across local state arrays
+    setLiveIdentifiers((prev) => prev.filter((r) => !idSet.has(r.id)));
+    setManualRecords((prev) => prev.filter((r) => !idSet.has(r.id)));
+    setRecords((prev) => prev.filter((r) => !idSet.has(r.id)));
+
+    try {
+      // Direct deletion from Firebase Firestore collection: live_identifiers
+      const res = await adminBulkDeleteLiveIdentifiers(recordIds, adminSession?.name || 'Administrator');
+      return res.deletedCount || count;
+    } catch (err: any) {
+      console.error('Bulk deletion error in Firestore:', err);
+      throw err;
+    }
+  };
+
   // Step 8.3: Handle Admin Approving a User Submission
   const handleApproveSubmission = async (
     submissionId: string,
@@ -1460,8 +1482,7 @@ export default function App() {
               onEditManualRecord={handleEditManualRecord}
               onDeleteManualRecord={handleDeleteManualRecord}
               onDeleteRecord={handleDeleteRecord}
-              onApproveSubmission={handleApproveSubmission}
-              onRejectSubmission={handleRejectSubmission}
+              onBulkDeleteIdentifiers={handleBulkDeleteIdentifiers}
               visitorStats={visitorStats}
               dailyVisitorStats={dailyVisitorStats}
               uploadProgress={uploadProgress}

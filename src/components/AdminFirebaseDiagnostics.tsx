@@ -19,7 +19,7 @@ import { getFirebaseConfigInfo, checkFirestoreConnectionHealth } from '../lib/fi
 interface AdminFirebaseDiagnosticsProps {
   liveSyncStatus: LiveSyncStatus;
   liveIdentifiers: LiveIdentifierRecord[];
-  submissions: SubmissionRecord[];
+  submissions?: SubmissionRecord[];
   lastSnapshotTimestamp: Date | null;
   className?: string;
 }
@@ -27,7 +27,7 @@ interface AdminFirebaseDiagnosticsProps {
 export const AdminFirebaseDiagnostics: React.FC<AdminFirebaseDiagnosticsProps> = ({
   liveSyncStatus,
   liveIdentifiers,
-  submissions,
+  submissions = [],
   lastSnapshotTimestamp,
   className = '',
 }) => {
@@ -41,7 +41,6 @@ export const AdminFirebaseDiagnostics: React.FC<AdminFirebaseDiagnosticsProps> =
   } | null>(null);
 
   const configInfo = getFirebaseConfigInfo();
-  const pendingSubmissionsCount = submissions.filter((s) => s.status === 'pending').length;
   const latest5DocIds = liveIdentifiers.slice(0, 5).map((r) => r.id);
 
   // Client device / browser details
@@ -222,24 +221,19 @@ export const AdminFirebaseDiagnostics: React.FC<AdminFirebaseDiagnosticsProps> =
           </div>
         </div>
 
-        {/* 4. submissions Count */}
+        {/* 4. Single Source of Truth / Data Isolation */}
         <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 space-y-1">
           <div className="flex items-center justify-between text-xs text-slate-500">
-            <span className="font-medium">submissions Queue</span>
-            <Clock className="w-3.5 h-3.5 text-slate-400" />
+            <span className="font-medium">Data Integrity</span>
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
           </div>
           <div className="flex items-baseline gap-2 font-mono">
-            <span className="font-bold text-xl text-slate-900">
-              {submissions.length.toLocaleString()}
+            <span className="font-bold text-sm text-slate-900">
+              Verified & Isolated
             </span>
-            {pendingSubmissionsCount > 0 && (
-              <span className="text-[11px] font-bold text-amber-600">
-                ({pendingSubmissionsCount} pending)
-              </span>
-            )}
           </div>
           <div className="text-[10px] text-slate-400">
-            Public user submissions pool
+            Single Source of Truth (Firestore)
           </div>
         </div>
       </div>

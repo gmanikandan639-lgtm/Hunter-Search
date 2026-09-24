@@ -13,6 +13,9 @@ import {
   User as FirebaseUser,
   setPersistence,
   browserLocalPersistence,
+  EmailAuthProvider,
+  reauthenticateWithCredential,
+  updatePassword as fbUpdatePassword,
 } from 'firebase/auth';
 import {
   getFirestore,
@@ -379,6 +382,100 @@ export const signInWithEmail = async (
  */
 export const sendPasswordReset = async (email: string): Promise<void> => {
   await sendPasswordResetEmail(auth, email.trim());
+};
+
+/**
+ * Changes the Admin password using Firebase Authentication.
+ * Re-authenticates the current user, updates the password in Firebase Auth,
+ * and enforces strict security rules:
+ * - Never stores passwords in Firestore, localStorage, sessionStorage, or code.
+ * - Enforces matching and strength requirements.
+ * - Returns user-friendly messages specified by the prompt:
+ *   "Password changed successfully."
+ *   "Current password is incorrect."
+ *   "New password and Confirm New Password do not match."
+ *   "Please choose a stronger password."
+ */
+export const changeAdminPassword = async (
+  currentPassword: string,
+  newPassword: string,
+  confirmNewPassword: string
+): Promise<{ success: boolean; message: string }> => {
+  const cleanCurrent = currentPassword.trim();
+  const cleanNew = newPassword.trim();
+  const cleanConfirm = confirmNewPassword.trim();
+
+  if (!cleanCurrent) {
+    return { success: false, message: 'Current password is required.' };
+  }
+  if (!cleanNew) {
+    return { success: false, message: 'New password is required.' };
+  }
+  if (cleanNew !== cleanConfirm) {
+    return { success: false, message: 'New password and Confirm New Password do not match.' };
+  }
+  if (cleanNew.length < 6) {
+    return { success: false, message: 'Please choose a stronger password.' };
+  }
+
+  let user = auth.currentUser;
+  if (!user || user.isAnonymous) {
+    try {
+      user = await ensureAdminFirebaseAuthenticated();
+    } catch {
+      return { success: false, message: 'Current password is incorrect.' };
+    }
+  }
+
+  const userEmail = user?.email || ADMIN_FIREBASE_EMAIL;
+
+  // 1. Re-authenticate with current password
+  try {
+    const cred = EmailAuthProvider.credential(userEmail, cleanCurrent);
+    await reauthenticateWithCredential(user, cred);
+  } catch (reauthErr: any) {
+    const code = reauthErr?.code || '';
+    if (
+      code === 'auth/wrong-password' ||
+      code === 'auth/invalid-credential' ||
+      code === 'auth/invalid-password' ||
+      code === 'auth/user-mismatch'
+    ) {
+      return { success: false, message: 'Current password is incorrect.' };
+    }
+    // Attempt sign-in with current password if session had expired
+    try {
+      const signInRes = await signInWithEmailAndPassword(auth, userEmail, cleanCurrent);
+      user = signInRes.user;
+    } catch {
+      return { success: false, message: 'Current password is incorrect.' };
+    }
+  }
+
+  // 2. Update password in Firebase Authentication
+  try {
+    await fbUpdatePassword(user, cleanNew);
+    return { success: true, message: 'Password changed successfully.' };
+  } catch (updateErr: any) {
+    const code = updateErr?.code || '';
+    if (code === 'auth/weak-password') {
+      return { success: false, message: 'Please choose a stronger password.' };
+    }
+    if (code === 'auth/requires-recent-login') {
+      try {
+        const cred = EmailAuthProvider.credential(userEmail, cleanCurrent);
+        await reauthenticateWithCredential(user, cred);
+        await fbUpdatePassword(user, cleanNew);
+        return { success: true, message: 'Password changed successfully.' };
+      } catch {
+        return { success: false, message: 'Please log in again before changing your password.' };
+      }
+    }
+    return {
+      success: false,
+      message: updateErr?.message || 'Could not update password. Please try again.',
+    };
+  }
 };
 
 // Synchronize User profile & check admin in Firestore
@@ -3235,6 +3332,59 @@ export const adminDirectDeleteLiveIdentifier = async (
 };
 
 /**
+ * Admin Bulk Delete: Remove multiple selected identifiers directly from Cloud Firestore
+ * Safely batches deletes up to Firestore's operation limits and updates collection: live_identifiers
+ */
+export const adminBulkDeleteLiveIdentifiers = async (
+  recordDocIds: string[],
+  _adminName?: string
+): Promise<{ deletedCount: number }> => {
+  await ensureAdminFirebaseAuthenticated();
+  if (!recordDocIds || recordDocIds.length === 0) {
+    return { deletedCount: 0 };
+  }
+
+  const uniqueIds = Array.from(new Set(recordDocIds.filter(Boolean)));
+  if (uniqueIds.length === 0) return { deletedCount: 0 };
+
+  let deletedCount = 0;
+  const CHUNK_SIZE = 200; // Well within 500 ops per batch limit
+
+  for (let i = 0; i < uniqueIds.length; i += CHUNK_SIZE) {
+    const chunk = uniqueIds.slice(i, i + CHUNK_SIZE);
+    const batch = writeBatch(db);
+
+    for (const docId of chunk) {
+      // 1. Delete from live_identifiers collection
+      const liveRef = doc(db, LIVE_IDENTIFIERS_COLLECTION, docId);
+      batch.delete(liveRef);
+
+      // 2. Also delete from manual_identifiers if it exists there
+      const manualRef = doc(db, 'manual_identifiers', docId);
+      batch.delete(manualRef);
+    }
+
+    try {
+      await batch.commit();
+      deletedCount += chunk.length;
+    } catch (batchErr) {
+      console.warn('Batch delete warning, attempting individual deletions:', batchErr);
+      for (const docId of chunk) {
+        try {
+          await deleteDoc(doc(db, LIVE_IDENTIFIERS_COLLECTION, docId));
+          await deleteDoc(doc(db, 'manual_identifiers', docId)).catch(() => {});
+          deletedCount++;
+        } catch (singleErr) {
+          console.warn(`Could not delete document ${docId}:`, singleErr);
+        }
+      }
+    }
+  }
+
+  return { deletedCount };
+};
+
+/**
  * Public & Admin Search Query: Queries the master 'live_identifiers' collection in Cloud Firestore
  * - Strictly queries master live_identifiers
  * - Normalizes query with getNormalizedIdentifier ("ABC-123", "abc123", "ABC 123" all match "ABC123")
@@ -3752,19 +3902,27 @@ export const downloadLiveIdentifiersAsCSV = (records: LiveIdentifierRecord[]): v
 
 /**
  * Migration & Preservation of Existing Data:
- * Migrates sample reference database and any existing records into live_identifiers
- * if the live_identifiers collection has fewer than 5 documents.
+ * Migrates sample reference database into live_identifiers only on initial first launch.
+ * Never re-seeds deleted records.
  */
 export const seedLiveIdentifiersIfEmpty = async (): Promise<number> => {
   if (!isFirebaseConfigured) return 0;
   try {
+    // If already initialized in this environment, never re-seed deleted records
+    if (typeof window !== 'undefined' && localStorage.getItem('hunter_live_identifiers_seeded')) {
+      return 0;
+    }
+
     const colRef = collection(db, LIVE_IDENTIFIERS_COLLECTION);
-    const snap = await getDocs(query(colRef, limit(200)));
-    if (snap.size >= 200) {
+    const snap = await getDocs(query(colRef, limit(1)));
+    if (!snap.empty) {
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('hunter_live_identifiers_seeded', 'true');
+      }
       return snap.size;
     }
 
-    // Seed full master dataset from CSV reference with UNMASKED organisation names
+    // Seed full master dataset from CSV reference with UNMASKED organisation names only on fresh empty DB
     const initial = getInitialDemoData();
     const recordsToSeed = initial.records;
     const now = new Date().toISOString();
@@ -3806,6 +3964,9 @@ export const seedLiveIdentifiersIfEmpty = async (): Promise<number> => {
         totalCount++;
       }
       await batch.commit();
+    }
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('hunter_live_identifiers_seeded', 'true');
     }
     return totalCount;
   } catch (err) {

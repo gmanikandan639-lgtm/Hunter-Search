@@ -49,16 +49,25 @@ import {
   X,
   XCircle,
   Calendar,
+  Lock,
+  KeyRound,
+  Eye,
+  EyeOff,
+  AlertCircle,
 } from 'lucide-react';
 import { searchDatabase } from '../utils/similarity';
 import { parseCSVText, exportToCSV } from '../utils/csvParser';
 import { AddManualRecordModal, ManualRecordInput } from './AddManualRecordModal';
-import { AdminApprovalsManager } from './AdminApprovalsManager';
-import { AdminUserManagement } from './AdminUserManagement';
 import { maskIdentifierNumber, maskGenericNumber } from '../utils/masking';
 import { VisitorStats, DailyVisitorStat, LiveIdentifierRecord, SubmissionRecord, LiveSyncStatus } from '../types';
 import { AdminFirebaseDiagnostics } from './AdminFirebaseDiagnostics';
-import { formatDailyDateDisplay, SEED_DAILY_STATS, subscribeToAllRegisteredUsers, seedDefaultUsersIfEmpty, exportLiveIdentifiersDirectFromFirestore } from '../lib/firebase';
+import {
+  formatDailyDateDisplay,
+  SEED_DAILY_STATS,
+  exportLiveIdentifiersDirectFromFirestore,
+  changeAdminPassword,
+  adminBulkDeleteLiveIdentifiers,
+} from '../lib/firebase';
 import { OrganisationWiseCount } from './OrganisationWiseCount';
 
 interface AdminDashboardProps {
@@ -81,16 +90,7 @@ interface AdminDashboardProps {
   onEditManualRecord?: (record: ManualRecordInput) => void;
   onDeleteManualRecord?: (recordId: string) => void;
   onDeleteRecord?: (recordId: string) => void;
-  onApproveSubmission?: (
-    submissionId: string,
-    adminName: string,
-    adjustedData?: Partial<ManualHunterRecord>
-  ) => Promise<void> | void;
-  onRejectSubmission?: (
-    submissionId: string,
-    adminName: string,
-    reason: string
-  ) => Promise<void> | void;
+  onBulkDeleteIdentifiers?: (recordIds: string[]) => Promise<number>;
   visitorStats?: VisitorStats;
   dailyVisitorStats?: DailyVisitorStat[];
   uploadProgress?: number | null;
@@ -99,14 +99,12 @@ interface AdminDashboardProps {
   liveIdentifiers?: LiveIdentifierRecord[];
   submissions?: SubmissionRecord[];
   lastSnapshotTimestamp?: Date | null;
-  registeredUsers?: FirestoreUserProfile[];
   onTriggerToast?: (toast: {
     type: 'success' | 'error' | 'info' | 'warning';
     title: string;
     message: string;
     subtext?: string;
   }) => void;
-  onRefreshUsers?: () => void;
   currentAdminEmail?: string;
 }
 
@@ -130,8 +128,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onEditManualRecord,
   onDeleteManualRecord,
   onDeleteRecord,
-  onApproveSubmission,
-  onRejectSubmission,
+  onBulkDeleteIdentifiers,
   visitorStats,
   dailyVisitorStats = SEED_DAILY_STATS,
   uploadProgress = null,
@@ -140,9 +137,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   liveIdentifiers = [],
   submissions = [],
   lastSnapshotTimestamp = null,
-  registeredUsers = [],
   onTriggerToast,
-  onRefreshUsers,
   currentAdminEmail,
 }) => {
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
@@ -150,42 +145,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [isAddRecordModalOpen, setIsAddRecordModalOpen] = useState<boolean>(false);
   const [editingManualRecord, setEditingManualRecord] = useState<ManualHunterRecord | null>(null);
 
-  // Registered Users Directory state & live subscription
-  const [internalUsers, setInternalUsers] = useState<FirestoreUserProfile[]>([]);
-  useEffect(() => {
-    seedDefaultUsersIfEmpty().catch(() => {});
-    const unsubscribe = subscribeToAllRegisteredUsers(
-      (list) => {
-        setInternalUsers(list);
-      },
-      (err: any) => {
-        if (err?.code !== 'unavailable' && err?.code !== 'permission-denied') {
-          console.warn('Users fetch notice:', err);
-        }
-      }
-    );
-    return () => unsubscribe();
-  }, []);
-
-  const registeredUsersList =
-    registeredUsers && registeredUsers.length > 0 ? registeredUsers : internalUsers;
-
-  // Status breakdown of manual records & submissions
-  const pendingSubmissions = useMemo(
-    () => manualRecords.filter((r) => r.approvalStatus === 'pending'),
-    [manualRecords]
-  );
+  // Status breakdown of manual records
   const approvedManualRecords = useMemo(
-    () => manualRecords.filter((r) => r.approvalStatus === 'approved' || !r.approvalStatus),
-    [manualRecords]
-  );
-  const rejectedSubmissions = useMemo(
-    () => manualRecords.filter((r) => r.approvalStatus === 'rejected'),
+    () => manualRecords.filter((r) => r.approvalStatus !== 'rejected'),
     [manualRecords]
   );
   const totalLiveIdentifiersCount = useMemo(
-    () => records.length + approvedManualRecords.length,
-    [records.length, approvedManualRecords.length]
+    () => (liveIdentifiers.length > 0 ? liveIdentifiers.length : records.length + approvedManualRecords.length),
+    [liveIdentifiers.length, records.length, approvedManualRecords.length]
   );
 
   // Manual Records Filter & Pagination
@@ -193,10 +160,67 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [manualPage, setManualPage] = useState<number>(1);
   const [manualRowsPerPage, setManualRowsPerPage] = useState<number>(10);
 
-  // Table Preview State (CSV Management)
-  const [previewSearch, setPreviewSearch] = useState<string>('');
-  const [previewPage, setPreviewPage] = useState<number>(1);
-  const [rowsPerPage, setRowsPerPage] = useState<number>(15);
+  // Change Password Form State (Admin-Only via Firebase Authentication)
+  const [currentPassword, setCurrentPassword] = useState<string>('');
+  const [newPassword, setNewPassword] = useState<string>('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState<string>('');
+  const [showCurrentPassword, setShowCurrentPassword] = useState<boolean>(false);
+  const [showNewPassword, setShowNewPassword] = useState<boolean>(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState<boolean>(false);
+  const [isChangingPassword, setIsChangingPassword] = useState<boolean>(false);
+  const [passwordChangeSuccess, setPasswordChangeSuccess] = useState<string | null>(null);
+  const [passwordChangeError, setPasswordChangeError] = useState<string | null>(null);
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPasswordChangeError(null);
+    setPasswordChangeSuccess(null);
+
+    const cleanCurrent = currentPassword.trim();
+    const cleanNew = newPassword.trim();
+    const cleanConfirm = confirmNewPassword.trim();
+
+    if (!cleanCurrent) {
+      setPasswordChangeError('Current password is incorrect.');
+      return;
+    }
+    if (!cleanNew) {
+      setPasswordChangeError('Please enter a new password.');
+      return;
+    }
+    if (cleanNew !== cleanConfirm) {
+      setPasswordChangeError('New password and Confirm New Password do not match.');
+      return;
+    }
+    if (cleanNew.length < 6) {
+      setPasswordChangeError('Please choose a stronger password.');
+      return;
+    }
+
+    setIsChangingPassword(true);
+    try {
+      const res = await changeAdminPassword(cleanCurrent, cleanNew, cleanConfirm);
+      if (res.success) {
+        setPasswordChangeSuccess('Password changed successfully.');
+        setCurrentPassword('');
+        setNewPassword('');
+        setConfirmNewPassword('');
+        if (onTriggerToast) {
+          onTriggerToast({
+            type: 'success',
+            title: 'Password Changed',
+            message: 'Password changed successfully.',
+          });
+        }
+      } else {
+        setPasswordChangeError(res.message);
+      }
+    } catch (err: any) {
+      setPasswordChangeError(err?.message || 'Current password is incorrect.');
+    } finally {
+      setIsChangingPassword(false);
+    }
+  };
 
   // Upload Validation State
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -204,30 +228,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [isDragging, setIsDragging] = useState<boolean>(false);
 
   const hasData = csvMetadata.status === 'ACTIVE' && records.length > 0;
-
-  // Filtered preview records
-  const filteredPreviewRecords = useMemo(() => {
-    if (!previewSearch.trim()) return records;
-    const q = previewSearch.toLowerCase().trim();
-    return records.filter((r) => {
-      const matchId = (r.hunterId || '').toLowerCase().includes(q);
-      const matchBank = (r.bankName || '').toLowerCase().includes(q);
-      const matchRaw = Object.values(r.rawColumns || {}).some((val) =>
-        String(val).toLowerCase().includes(q)
-      );
-      return matchId || matchBank || matchRaw;
-    });
-  }, [records, previewSearch]);
-
-  const totalPreviewPages = Math.max(
-    1,
-    Math.ceil(filteredPreviewRecords.length / rowsPerPage)
-  );
-
-  const paginatedPreviewRecords = useMemo(() => {
-    const start = (previewPage - 1) * rowsPerPage;
-    return filteredPreviewRecords.slice(start, start + rowsPerPage);
-  }, [filteredPreviewRecords, previewPage, rowsPerPage]);
 
   // Aggregate Metrics for Overview
   const totalMatchesAcrossHistory = useMemo(() => {
@@ -364,26 +364,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       badgeColor: 'bg-emerald-100 text-emerald-800 font-bold',
     },
     {
-      id: 'users',
-      label: 'User Accounts & Logins',
-      icon: Users,
-      badge: registeredUsersList.length > 0 ? registeredUsersList.length : undefined,
-      badgeColor: 'bg-indigo-100 text-indigo-800 font-bold',
-    },
-    {
-      id: 'approvals',
-      label: 'User Submissions & Approvals',
-      icon: Clock,
-      badge: pendingSubmissions.length > 0 ? pendingSubmissions.length : undefined,
-      badgeColor: pendingSubmissions.length > 0 ? 'bg-amber-400 text-amber-950 font-black' : undefined,
-    },
-    {
       id: 'manual-records',
-      label: 'Live Manual Identifiers',
-      icon: UserPlus,
+      label: 'Hunter Identifier Management',
+      icon: Database,
       badge: unifiedLiveRecords.length,
     },
-    { id: 'csv-management', label: 'CSV Data Management', icon: Database },
+    { id: 'csv-management', label: 'CSV Data Management', icon: UploadCloud },
     { id: 'search-history', label: 'Search History', icon: History, badge: searchHistory.length },
     { id: 'settings', label: 'Settings & Profile', icon: Settings },
   ];
@@ -399,7 +385,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       const matchName = (r.name || '').toLowerCase().includes(q);
       const matchStatus = (r.status || '').toLowerCase().includes(q);
       const matchRemarks = (r.remarks || r.notes || '').toLowerCase().includes(q);
-      return matchId || matchBank || matchName || matchStatus || matchRemarks;
+      const matchOrgType = (r.orgType || '').toLowerCase().includes(q);
+      return matchId || matchBank || matchName || matchStatus || matchRemarks || matchOrgType;
     });
   }, [unifiedLiveRecords, manualSearch]);
 
@@ -408,6 +395,114 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const start = (manualPage - 1) * manualRowsPerPage;
     return filteredManualRecords.slice(start, start + manualRowsPerPage);
   }, [filteredManualRecords, manualPage, manualRowsPerPage]);
+
+  // Selection & Bulk Deletion State for Admin Identifiers
+  const [selectedRecordIds, setSelectedRecordIds] = useState<Set<string>>(new Set());
+  const [isBulkDeleteModalOpen, setIsBulkDeleteModalOpen] = useState<boolean>(false);
+  const [isDeletingBulk, setIsDeletingBulk] = useState<boolean>(false);
+  const [bulkDeleteSuccessMessage, setBulkDeleteSuccessMessage] = useState<{ message: string; count: number } | null>(null);
+
+  const isAllVisibleSelected =
+    paginatedManualRecords.length > 0 &&
+    paginatedManualRecords.every((item) => selectedRecordIds.has(item.id));
+
+  const isSomeVisibleSelected =
+    paginatedManualRecords.some((item) => selectedRecordIds.has(item.id)) &&
+    !isAllVisibleSelected;
+
+  const toggleSelectRecord = (recordId: string) => {
+    setSelectedRecordIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(recordId)) {
+        next.delete(recordId);
+      } else {
+        next.add(recordId);
+      }
+      return next;
+    });
+  };
+
+  const handleToggleSelectAll = () => {
+    if (isAllVisibleSelected) {
+      setSelectedRecordIds((prev) => {
+        const next = new Set(prev);
+        paginatedManualRecords.forEach((item) => {
+          next.delete(item.id);
+        });
+        return next;
+      });
+    } else {
+      setSelectedRecordIds((prev) => {
+        const next = new Set(prev);
+        paginatedManualRecords.forEach((item) => {
+          next.add(item.id);
+        });
+        return next;
+      });
+    }
+  };
+
+  const handleSelectAllVisible = () => {
+    setSelectedRecordIds((prev) => {
+      const next = new Set(prev);
+      filteredManualRecords.forEach((item) => {
+        next.add(item.id);
+      });
+      return next;
+    });
+  };
+
+  const handleClearSelection = () => {
+    setSelectedRecordIds(new Set());
+  };
+
+  const handleConfirmBulkDelete = async () => {
+    if (selectedRecordIds.size === 0) return;
+    const idsToDelete = Array.from(selectedRecordIds);
+    setIsDeletingBulk(true);
+
+    try {
+      let deleted = 0;
+      if (onBulkDeleteIdentifiers) {
+        deleted = await onBulkDeleteIdentifiers(idsToDelete);
+      } else {
+        const res = await adminBulkDeleteLiveIdentifiers(idsToDelete, adminSession?.name);
+        deleted = res.deletedCount;
+      }
+
+      const count = deleted || idsToDelete.length;
+      setSelectedRecordIds(new Set());
+      setIsBulkDeleteModalOpen(false);
+
+      setBulkDeleteSuccessMessage({
+        message: 'Selected identifiers deleted successfully.',
+        count,
+      });
+
+      if (onTriggerToast) {
+        onTriggerToast({
+          type: 'success',
+          title: 'Selected Identifiers Deleted',
+          message: 'Selected identifiers deleted successfully.',
+          subtext: `Deleted: ${count}`,
+        });
+      }
+
+      setTimeout(() => {
+        setBulkDeleteSuccessMessage(null);
+      }, 7000);
+    } catch (err: any) {
+      if (onTriggerToast) {
+        onTriggerToast({
+          type: 'error',
+          title: 'Bulk Deletion Failed',
+          message: err?.message || 'Failed to delete selected identifiers from Firestore.',
+        });
+      }
+    } finally {
+      setIsDeletingBulk(false);
+    }
+  };
 
   const getStatusBadge = (statusStr: string = '') => {
     const s = statusStr.toLowerCase();
@@ -440,6 +535,355 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       dot: 'bg-indigo-500',
     };
   };
+
+  const renderIdentifierTable = () => (
+    <div className="bg-white rounded-2xl border border-slate-200/90 shadow-xs overflow-hidden">
+      {/* Success banner if active */}
+      {bulkDeleteSuccessMessage && (
+        <div className="p-4 m-4 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-900 flex items-center justify-between animate-in fade-in">
+          <div className="flex items-center gap-2.5">
+            <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+            <div>
+              <div className="font-extrabold text-emerald-950 text-sm">
+                {bulkDeleteSuccessMessage.message}
+              </div>
+              <div className="text-emerald-700 font-bold mt-0.5">
+                Deleted: {bulkDeleteSuccessMessage.count}
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setBulkDeleteSuccessMessage(null)}
+            className="text-xs font-bold text-emerald-800 hover:text-emerald-950 px-2.5 py-1 rounded-lg hover:bg-emerald-100 cursor-pointer"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {/* Search & Filter Bar */}
+      <div className="p-4 bg-slate-50/70 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="relative flex-1 max-w-md">
+          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            value={manualSearch}
+            onChange={(e) => {
+              setManualSearch(e.target.value);
+              setManualPage(1);
+            }}
+            placeholder="Search identifiers (identifier, bank, status, remarks)..."
+            className="w-full pl-9 pr-3 py-2 text-xs bg-white border border-slate-300 rounded-xl focus:border-indigo-600 outline-hidden font-medium"
+          />
+        </div>
+
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5 text-xs text-slate-500">
+            <span>Rows:</span>
+            <select
+              value={manualRowsPerPage}
+              onChange={(e) => {
+                setManualRowsPerPage(Number(e.target.value));
+                setManualPage(1);
+              }}
+              className="px-2 py-1 text-xs bg-white border border-slate-300 rounded-lg text-slate-700 font-semibold focus:border-indigo-600 outline-hidden cursor-pointer"
+            >
+              <option value={10}>10</option>
+              <option value={25}>25</option>
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+            </select>
+          </div>
+
+          <div className="text-xs text-slate-500">
+            Showing <span className="font-bold text-slate-800">{filteredManualRecords.length}</span> of {unifiedLiveRecords.length} live records
+          </div>
+        </div>
+      </div>
+
+      {/* Selection & Bulk Actions Control Bar */}
+      <div className="px-4 py-3 bg-slate-50/90 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs">
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5 font-bold text-slate-700">
+            <span>Selected:</span>
+            <span
+              id="admin-selected-count-badge"
+              className={`px-2.5 py-0.5 rounded-full font-mono font-black text-xs ${
+                selectedRecordIds.size > 0
+                  ? 'bg-indigo-600 text-white shadow-2xs'
+                  : 'bg-slate-200 text-slate-600'
+              }`}
+            >
+              {selectedRecordIds.size}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <button
+              id="admin-select-all-btn"
+              type="button"
+              onClick={handleSelectAllVisible}
+              className="px-2.5 py-1 rounded-lg bg-white hover:bg-slate-100 border border-slate-300 text-slate-700 font-semibold cursor-pointer text-[11px] shadow-2xs transition-colors"
+              title="Select all records in current filtered view"
+            >
+              Select All
+            </button>
+            {selectedRecordIds.size > 0 && (
+              <button
+                id="admin-clear-selection-btn"
+                type="button"
+                onClick={handleClearSelection}
+                className="px-2.5 py-1 rounded-lg bg-white hover:bg-slate-100 border border-slate-300 text-slate-600 font-semibold cursor-pointer text-[11px] shadow-2xs transition-colors"
+                title="Clear all selections"
+              >
+                Clear Selection
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {selectedRecordIds.size > 0 ? (
+            <button
+              id="admin-delete-selected-btn"
+              type="button"
+              onClick={() => setIsBulkDeleteModalOpen(true)}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl font-extrabold text-xs bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white shadow-md shadow-rose-600/20 transition-all cursor-pointer animate-in fade-in"
+              title={`Delete ${selectedRecordIds.size} selected identifier(s)`}
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Delete Selected</span>
+              <span className="ml-1 px-1.5 py-0.2 rounded-full bg-rose-800 text-white font-mono text-[10px] font-black">
+                Selected: {selectedRecordIds.size}
+              </span>
+            </button>
+          ) : (
+            <button
+              id="admin-delete-selected-disabled-btn"
+              type="button"
+              disabled
+              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl font-bold text-xs bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-60"
+              title="Select one or more identifiers to delete"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-slate-400" />
+              <span>Delete Selected</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Table Content */}
+      {filteredManualRecords.length === 0 ? (
+        <div className="p-12 text-center space-y-3">
+          <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto">
+            <Database className="w-6 h-6" />
+          </div>
+          <div className="space-y-1">
+            <h4 className="text-sm font-extrabold text-slate-900">
+              {manualSearch ? 'No matching identifiers found' : 'No identifiers registered yet'}
+            </h4>
+            <p className="text-xs text-slate-500 max-w-sm mx-auto">
+              {manualSearch
+                ? 'Try adjusting your search keywords.'
+                : 'Click "+ Add Hunter Identifier Manually" or upload a CSV to register reference records.'}
+            </p>
+          </div>
+          {!manualSearch && (
+            <button
+              type="button"
+              onClick={() => {
+                setEditingManualRecord(null);
+                setIsAddRecordModalOpen(true);
+              }}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm transition-colors cursor-pointer"
+            >
+              <PlusCircle className="w-4 h-4" />
+              <span>Add First Record</span>
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse text-xs">
+            <thead>
+              <tr className="bg-slate-100/80 border-b border-slate-200 text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                <th className="py-3 px-4 w-12 text-center">
+                  <div className="flex items-center justify-center">
+                    <input
+                      type="checkbox"
+                      id="admin-select-all-header-checkbox"
+                      checked={isAllVisibleSelected}
+                      ref={(el) => {
+                        if (el) el.indeterminate = isSomeVisibleSelected;
+                      }}
+                      onChange={handleToggleSelectAll}
+                      className="w-4 h-4 rounded text-indigo-600 border-slate-300 focus:ring-indigo-500 cursor-pointer"
+                      title={isAllVisibleSelected ? 'Deselect all visible' : 'Select all visible'}
+                    />
+                  </div>
+                </th>
+                <th className="py-3 px-4">Hunter Identifier</th>
+                <th className="py-3 px-4">Bank / NBFC Name</th>
+                <th className="py-3 px-4">Type</th>
+                <th className="py-3 px-4">Approval State</th>
+                <th className="py-3 px-4 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-200">
+              {paginatedManualRecords.map((item) => {
+                const isSelected = selectedRecordIds.has(item.id);
+                const isApproved = item.approvalStatus === 'approved' || !item.approvalStatus;
+                const isPending = item.approvalStatus === 'pending';
+                const isRejected = item.approvalStatus === 'rejected';
+
+                return (
+                  <tr
+                    key={item.id}
+                    className={`hover:bg-slate-50/80 transition-colors ${
+                      isSelected ? 'bg-indigo-50/50' : ''
+                    }`}
+                  >
+                    {/* Checkbox */}
+                    <td className="py-3.5 px-4 text-center">
+                      <div className="flex items-center justify-center">
+                        <input
+                          type="checkbox"
+                          id={`select-record-${item.id}`}
+                          checked={isSelected}
+                          onChange={() => toggleSelectRecord(item.id)}
+                          className="w-4 h-4 rounded text-indigo-600 border-slate-300 focus:ring-indigo-500 cursor-pointer"
+                          title={`Select identifier ${item.hunterId}`}
+                        />
+                      </div>
+                    </td>
+
+                    {/* Identifier */}
+                    <td className="py-3.5 px-4 font-mono font-bold text-slate-900 text-xs">
+                      {item.hunterId}
+                    </td>
+
+                    {/* Bank Name */}
+                    <td className="py-3.5 px-4">
+                      <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-50/60 border border-indigo-100 text-indigo-950 font-bold text-xs">
+                        <Building2 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                        <span>{item.bankName}</span>
+                      </div>
+                    </td>
+
+                    {/* Type (Bank / NBFC) */}
+                    <td className="py-3.5 px-4">
+                      <span
+                        className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-extrabold border ${
+                          item.orgType === 'NBFC'
+                            ? 'bg-purple-50 text-purple-700 border-purple-200'
+                            : 'bg-blue-50 text-blue-700 border-blue-200'
+                        }`}
+                      >
+                        {item.orgType || (item.bankName.toLowerCase().includes('bank') ? 'Bank' : 'NBFC')}
+                      </span>
+                    </td>
+
+                    {/* Approval State */}
+                    <td className="py-3.5 px-4">
+                      {isApproved && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                          <CheckCircle className="w-3 h-3 text-emerald-600" />
+                          Live Search
+                        </span>
+                      )}
+                      {isPending && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-extrabold bg-amber-100 text-amber-900 border border-amber-300 animate-pulse">
+                          <Clock className="w-3 h-3 text-amber-600" />
+                          Pending Review
+                        </span>
+                      )}
+                      {isRejected && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-extrabold bg-rose-100 text-rose-800 border border-rose-200">
+                          <X className="w-3 h-3 text-rose-600" />
+                          Rejected
+                        </span>
+                      )}
+                    </td>
+
+                    {/* Actions: Edit & Delete */}
+                    <td className="py-3.5 px-4 text-right whitespace-nowrap">
+                      <div className="flex items-center justify-end gap-1.5">
+                        <button
+                          id={`edit-manual-record-${item.id}`}
+                          type="button"
+                          onClick={() => {
+                            setEditingManualRecord(item);
+                            setIsAddRecordModalOpen(true);
+                          }}
+                          className="p-1.5 rounded-lg bg-slate-100 hover:bg-indigo-50 hover:text-indigo-700 text-slate-600 transition-colors inline-flex items-center gap-1 text-[11px] font-bold cursor-pointer"
+                          title="Edit Manual Identifier"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                          <span>Edit</span>
+                        </button>
+
+                        <button
+                          id={`delete-manual-record-${item.id}`}
+                          type="button"
+                          onClick={() => {
+                            if (
+                              window.confirm(
+                                `Are you sure you want to delete Hunter Identifier "${item.hunterId}" (${item.bankName})? This will immediately remove it from the active search database for all users.`
+                              )
+                            ) {
+                              onDeleteManualRecord?.(item.id);
+                              setSelectedRecordIds((prev) => {
+                                const next = new Set(prev);
+                                next.delete(item.id);
+                                return next;
+                              });
+                            }
+                          }}
+                          className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 transition-colors inline-flex items-center gap-1 text-[11px] font-bold cursor-pointer"
+                          title="Delete from Central Database"
+                        >
+                          <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                          <span>Delete</span>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Pagination */}
+      {totalManualPages > 1 && (
+        <div className="p-3 border-t border-slate-200 bg-slate-50/50 flex items-center justify-between text-xs">
+          <span className="text-slate-500">
+            Page {manualPage} of {totalManualPages}
+          </span>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              disabled={manualPage === 1}
+              onClick={() => setManualPage((p) => Math.max(1, p - 1))}
+              className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-slate-700 disabled:opacity-40 font-semibold cursor-pointer"
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              disabled={manualPage === totalManualPages}
+              onClick={() => setManualPage((p) => Math.min(totalManualPages, p + 1))}
+              className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-slate-700 disabled:opacity-40 font-semibold cursor-pointer"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <div id="admin-dashboard-container" className="w-full min-h-[82vh] flex flex-col space-y-6">
@@ -481,6 +925,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           >
             <Download className="w-3.5 h-3.5" />
             <span>{isExportingFirestore ? 'Exporting...' : 'Download Overall Identifier Details'}</span>
+          </button>
+
+          <button
+            id="admin-topbar-change-password-btn"
+            type="button"
+            onClick={() => setActiveTab('settings')}
+            className="flex items-center gap-1.5 py-2 px-3 rounded-xl bg-slate-50 hover:bg-indigo-50 hover:text-indigo-700 text-slate-700 text-xs font-bold border border-slate-200 hover:border-indigo-200 transition-colors cursor-pointer"
+            title="Admin Profile & Change Password"
+          >
+            <KeyRound className="w-3.5 h-3.5 text-indigo-600" />
+            <span>Change Password</span>
           </button>
 
           <button
@@ -595,7 +1050,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           {/* ======================================================== */}
           {activeTab === 'overview' && (
             <div id="admin-tab-overview" className="space-y-6 animate-in fade-in duration-200">
-              {/* Core Workflow Metric Cards Grid (Requirements 15 & 16) */}
+              {/* Core Workflow Metric Cards Grid */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 {/* 1. Total LIVE Identifiers in Portal */}
                 <div className="bg-white p-5 rounded-2xl border border-indigo-100 shadow-xs space-y-1 relative overflow-hidden ring-1 ring-indigo-500/10">
@@ -616,66 +1071,72 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                 </div>
 
-                {/* 2. Pending Submissions */}
+                {/* 2. Organisation Wise Entities */}
                 <div
-                  id="admin-approvals-overview-card"
-                  className={`p-5 rounded-2xl border shadow-xs space-y-1 cursor-pointer transition-all ${
-                    pendingSubmissions.length > 0
-                      ? 'bg-gradient-to-br from-amber-500/10 via-amber-50 to-white border-amber-300 hover:border-amber-400 ring-1 ring-amber-200'
-                      : 'bg-white border-slate-200/90 hover:border-indigo-200'
-                  }`}
-                  onClick={() => setActiveTab('approvals')}
+                  id="admin-overview-orgs-card"
+                  className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-xs space-y-1 cursor-pointer hover:border-indigo-300 hover:ring-1 hover:ring-indigo-100 transition-all group"
+                  onClick={() => setActiveTab('organisation-counts')}
+                >
+                  <div className="flex items-center justify-between text-slate-500">
+                    <span className="text-xs font-bold uppercase tracking-wider text-indigo-900">
+                      Financial Institutions
+                    </span>
+                    <Building2 className="w-4 h-4 text-indigo-600 group-hover:scale-110 transition-transform" />
+                  </div>
+                  <div className="text-2xl sm:text-3xl font-black text-slate-900">
+                    {uniqueBanks.length}
+                  </div>
+                  <div className="text-[11px] text-slate-500 flex items-center justify-between pt-1 border-t border-slate-100">
+                    <span className="text-emerald-600 font-semibold">Banks & NBFCs Covered</span>
+                    <span className="font-bold text-indigo-600 group-hover:text-indigo-800">
+                      View →
+                    </span>
+                  </div>
+                </div>
+
+                {/* 3. Live Manual Identifiers */}
+                <div
+                  id="admin-overview-manual-card"
+                  className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-xs space-y-1 cursor-pointer hover:border-indigo-300 hover:ring-1 hover:ring-indigo-100 transition-all group"
+                  onClick={() => setActiveTab('manual-records')}
+                >
+                  <div className="flex items-center justify-between text-slate-500">
+                    <span className="text-xs font-bold uppercase tracking-wider text-indigo-900">
+                      Live Identifiers Managed
+                    </span>
+                    <UserPlus className="w-4 h-4 text-indigo-600 group-hover:scale-110 transition-transform" />
+                  </div>
+                  <div className="text-2xl sm:text-3xl font-black text-slate-900">
+                    {unifiedLiveRecords.length.toLocaleString()}
+                  </div>
+                  <div className="text-[11px] text-slate-500 flex items-center justify-between pt-1 border-t border-slate-100">
+                    <span>Admin Direct Management</span>
+                    <span className="font-bold text-indigo-600 group-hover:text-indigo-800">
+                      Manage →
+                    </span>
+                  </div>
+                </div>
+
+                {/* 4. Public Searches */}
+                <div
+                  id="admin-overview-searches-card"
+                  className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-xs space-y-1 cursor-pointer hover:border-indigo-300 hover:ring-1 hover:ring-indigo-100 transition-all group"
+                  onClick={() => setActiveTab('search-history')}
                 >
                   <div className="flex items-center justify-between text-slate-500">
                     <span className="text-xs font-bold uppercase tracking-wider text-amber-900">
-                      Pending Submissions
+                      Public Searches
                     </span>
-                    <Clock className={`w-4 h-4 ${pendingSubmissions.length > 0 ? 'text-amber-600 animate-pulse' : 'text-slate-400'}`} />
+                    <Search className="w-4 h-4 text-amber-600 group-hover:scale-110 transition-transform" />
                   </div>
                   <div className="text-2xl sm:text-3xl font-black text-slate-900">
-                    {pendingSubmissions.length}
+                    {searchHistory.length}
                   </div>
                   <div className="text-[11px] text-slate-500 flex items-center justify-between pt-1 border-t border-slate-100">
-                    <span>Awaiting Admin Review</span>
-                    <span className="font-bold text-indigo-600 hover:text-indigo-800">
-                      Queue →
+                    <span>Verification logs</span>
+                    <span className="font-bold text-indigo-600 group-hover:text-indigo-800">
+                      History →
                     </span>
-                  </div>
-                </div>
-
-                {/* 3. Approved Submissions */}
-                <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-xs space-y-1">
-                  <div className="flex items-center justify-between text-slate-500">
-                    <span className="text-xs font-bold uppercase tracking-wider text-emerald-900">
-                      Approved Submissions
-                    </span>
-                    <div className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
-                      <CheckCircle2 className="w-4 h-4" />
-                    </div>
-                  </div>
-                  <div className="text-2xl sm:text-3xl font-black text-slate-900">
-                    {approvedManualRecords.length.toLocaleString()}
-                  </div>
-                  <div className="text-[11px] text-slate-500 flex items-center gap-1 pt-1">
-                    <span className="text-emerald-600 font-semibold">Active & Searchable Live</span>
-                  </div>
-                </div>
-
-                {/* 4. Rejected Submissions */}
-                <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-xs space-y-1">
-                  <div className="flex items-center justify-between text-slate-500">
-                    <span className="text-xs font-bold uppercase tracking-wider text-slate-600">
-                      Rejected Submissions
-                    </span>
-                    <div className="w-7 h-7 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center">
-                      <XCircle className="w-4 h-4" />
-                    </div>
-                  </div>
-                  <div className="text-2xl sm:text-3xl font-black text-slate-900">
-                    {rejectedSubmissions.length.toLocaleString()}
-                  </div>
-                  <div className="text-[11px] text-slate-500 flex items-center gap-1 pt-1">
-                    <span>Audit history preserved</span>
                   </div>
                 </div>
               </div>
@@ -707,22 +1168,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
 
               {/* Secondary Dataset Summary Cards Grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {/* Metric 1: Detected Banking Entities */}
-                <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-xs space-y-1">
-                  <div className="flex items-center justify-between text-slate-500">
-                    <span className="text-xs font-bold uppercase tracking-wider">Financial Institutions</span>
-                    <Building2 className="w-4 h-4 text-indigo-600" />
-                  </div>
-                  <div className="text-2xl sm:text-3xl font-black text-slate-900">
-                    {uniqueBanks.length}
-                  </div>
-                  <div className="text-[11px] text-slate-500 flex items-center gap-1">
-                    <span className="text-emerald-600 font-semibold">Banks & NBFCs Covered</span>
-                  </div>
-                </div>
-
-                {/* Metric 2: Total CSV Files */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                {/* Metric 1: Master Dataset Status */}
                 <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-xs space-y-1">
                   <div className="flex items-center justify-between text-slate-500">
                     <span className="text-xs font-bold uppercase tracking-wider">Master Dataset Status</span>
@@ -736,21 +1183,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                 </div>
 
-                {/* Metric 3: Total Searches */}
-                <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-xs space-y-1">
-                  <div className="flex items-center justify-between text-slate-500">
-                    <span className="text-xs font-bold uppercase tracking-wider">Public Searches</span>
-                    <Search className="w-4 h-4 text-amber-600" />
-                  </div>
-                  <div className="text-2xl sm:text-3xl font-black text-slate-900">
-                    {searchHistory.length}
-                  </div>
-                  <div className="text-[11px] text-slate-500">
-                    Total session verification logs
-                  </div>
-                </div>
-
-                {/* Metric 4: Total Matching Results */}
+                {/* Metric 2: Total Matching Results */}
                 <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-xs space-y-1">
                   <div className="flex items-center justify-between text-slate-500">
                     <span className="text-xs font-bold uppercase tracking-wider">Matching Results</span>
@@ -764,7 +1197,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                 </div>
 
-                {/* Metric 5: Latest Uploaded File */}
+                {/* Metric 3: Latest Uploaded File */}
                 <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-xs space-y-1">
                   <div className="flex items-center justify-between text-slate-500">
                     <span className="text-xs font-bold uppercase tracking-wider">Latest Uploaded File</span>
@@ -778,7 +1211,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
                 </div>
 
-                {/* Metric 6: Last Updated Date/Time */}
+                {/* Metric 4: Last Updated Date/Time */}
                 <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-xs space-y-1">
                   <div className="flex items-center justify-between text-slate-500">
                     <span className="text-xs font-bold uppercase tracking-wider">Last Updated Date/Time</span>
@@ -791,29 +1224,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     System time synchronized
                   </div>
                 </div>
-
-                {/* User Accounts & Logins Directory Card */}
-                <div
-                  id="admin-overview-users-card"
-                  className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-xs space-y-1 cursor-pointer hover:border-indigo-300 hover:ring-1 hover:ring-indigo-100 transition-all group col-span-1 sm:col-span-2 lg:col-span-1"
-                  onClick={() => setActiveTab('users')}
-                >
-                  <div className="flex items-center justify-between text-slate-500">
-                    <span className="text-xs font-bold uppercase tracking-wider text-indigo-900">
-                      User Accounts & Logins
-                    </span>
-                    <Users className="w-4 h-4 text-indigo-600 group-hover:scale-110 transition-transform" />
-                  </div>
-                  <div className="text-2xl sm:text-3xl font-black text-slate-900">
-                    {registeredUsersList.length}
-                  </div>
-                  <div className="text-[11px] text-slate-500 flex items-center justify-between pt-1 border-t border-slate-100">
-                    <span>Google & Password Accounts</span>
-                    <span className="font-bold text-indigo-600 group-hover:text-indigo-800">
-                      Manage →
-                    </span>
-                  </div>
-                </div>
+              </div>
 
                 {/* Metric 7: Website Visitor Traffic */}
                 {visitorStats && (
@@ -992,7 +1403,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </table>
                   </div>
                 </div>
-              </div>
 
               {/* Master Cloud Firestore Synchronization & Connection Diagnostics */}
               <AdminFirebaseDiagnostics
@@ -1120,55 +1530,42 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 liveIdentifiers={liveIdentifiers}
                 onDownloadOverallData={handleDownloadOverallIdentifierDetails}
                 isDownloadingOverall={isExportingFirestore}
+                onEditRecord={(record) => {
+                  setEditingManualRecord({
+                    id: record.id,
+                    hunterId: record.identifier || record.hunterId || record.id,
+                    identifier: record.identifier || record.hunterId || record.id,
+                    bankName: record.organisationName || record.bankName || 'Unknown',
+                    name: record.name || record.details || '',
+                    accountNumber: record.accountNumber || '',
+                    mobile: record.mobile || '',
+                    pan: record.pan || '',
+                    status: (record.status as any) || 'Suspect',
+                    remarks: record.remarks || record.details || '',
+                    notes: record.details || record.remarks || '',
+                    createdAt: record.createdAt || new Date().toISOString(),
+                    createdBy: record.createdBy || 'Administrator',
+                    updatedAt: record.updatedAt,
+                    approvalStatus: 'approved',
+                    orgType: (record.orgType as any) || (record.bankName?.toLowerCase().includes('bank') ? 'Bank' : 'NBFC'),
+                  });
+                  setIsAddRecordModalOpen(true);
+                }}
+                onDeleteRecord={(recordId, identifierName) => {
+                  if (
+                    window.confirm(
+                      `Are you sure you want to delete Hunter Identifier "${identifierName || recordId}"? This will immediately remove it from the active search database for all users.`
+                    )
+                  ) {
+                    if (onDeleteManualRecord) {
+                      onDeleteManualRecord(recordId);
+                    } else if (onDeleteRecord) {
+                      onDeleteRecord(recordId);
+                    }
+                  }
+                }}
               />
             </div>
-          )}
-
-          {/* ======================================================== */}
-          {/* TAB: USER ACCOUNTS & LOGINS DIRECTORY (ADMIN ONLY) */}
-          {/* ======================================================== */}
-          {activeTab === 'users' && (
-            <AdminUserManagement
-              users={registeredUsersList}
-              adminSession={adminSession}
-              currentAdminEmail={currentAdminEmail || adminSession?.username}
-              onTriggerToast={onTriggerToast || ((t) => console.log('Toast:', t))}
-              onRefreshUsers={() => {
-                seedDefaultUsersIfEmpty().catch(() => {});
-                if (onRefreshUsers) onRefreshUsers();
-              }}
-            />
-          )}
-
-          {/* ======================================================== */}
-          {/* TAB: USER SUBMISSIONS & APPROVALS WORKFLOW */}
-          {/* ======================================================== */}
-          {activeTab === 'approvals' && (
-            <AdminApprovalsManager
-              submissions={manualRecords}
-              adminSession={adminSession}
-              uniqueBanks={uniqueBanks}
-              currentHeaders={csvMetadata.headers}
-              onApproveSubmission={
-                onApproveSubmission ||
-                (async (id) => {
-                  console.log('Approve submission:', id);
-                })
-              }
-              onRejectSubmission={
-                onRejectSubmission ||
-                (async (id, name, reason) => {
-                  console.log('Reject submission:', id, reason);
-                })
-              }
-              onDeleteSubmission={
-                onDeleteManualRecord
-                  ? async (id) => {
-                      onDeleteManualRecord(id);
-                    }
-                  : undefined
-              }
-            />
           )}
 
           {/* ======================================================== */}
@@ -1182,14 +1579,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <div className="space-y-1">
                     <div className="flex items-center gap-2">
                       <h2 className="text-lg font-extrabold text-slate-900 tracking-tight">
-                        Manual Hunter Identifiers
+                        Hunter Identifier Management
                       </h2>
                       <span className="text-xs font-extrabold px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
-                        {manualRecords.length} Active Records
+                        {unifiedLiveRecords.length} Live Records
                       </span>
                     </div>
                     <p className="text-xs text-slate-500 max-w-2xl leading-relaxed">
-                      Central database of Administrator-registered Hunter reference identifiers. These records are <strong>immediately searchable by all users</strong> in real time and <strong>persist across CSV uploads</strong>.
+                      Central database of LIVE Hunter reference identifiers in Cloud Firestore (CSV + Manual). Select records using checkboxes to perform bulk deletion directly from Firebase.
                     </p>
                   </div>
 
@@ -1215,7 +1612,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
                     <div>
                       <div className="text-[11px] font-bold text-slate-800">Persistent Storage</div>
-                      <div className="text-[10px] text-slate-500">Not deleted when CSV is replaced</div>
+                      <div className="text-[10px] text-slate-500">Live Firebase collection: live_identifiers</div>
                     </div>
                   </div>
 
@@ -1230,196 +1627,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </div>
 
                   <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80 flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center font-bold">
-                      <ShieldCheck className="w-4 h-4" />
+                    <div className="w-8 h-8 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center font-bold">
+                      <Trash2 className="w-4 h-4" />
                     </div>
                     <div>
-                      <div className="text-[11px] font-bold text-slate-800">Admin-Only Mutation</div>
-                      <div className="text-[10px] text-slate-500">Secured with backend authorization</div>
+                      <div className="text-[11px] font-bold text-slate-800">Admin Bulk Deletion</div>
+                      <div className="text-[10px] text-slate-500">Direct batch delete from Cloud Firestore</div>
                     </div>
                   </div>
                 </div>
               </div>
 
-              {/* Table / Records View Card */}
-              <div className="bg-white rounded-2xl border border-slate-200/90 shadow-xs overflow-hidden">
-                {/* Search & Filter Bar */}
-                <div className="p-4 bg-slate-50/70 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="relative flex-1 max-w-md">
-                    <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                    <input
-                      type="text"
-                      value={manualSearch}
-                      onChange={(e) => {
-                        setManualSearch(e.target.value);
-                        setManualPage(1);
-                      }}
-                      placeholder="Search manual records (identifier, bank, status, remarks)..."
-                      className="w-full pl-9 pr-3 py-2 text-xs bg-white border border-slate-300 rounded-xl focus:border-indigo-600 outline-hidden font-medium"
-                    />
-                  </div>
-
-                  <div className="text-xs text-slate-500">
-                    Showing <span className="font-bold text-slate-800">{filteredManualRecords.length}</span> of {manualRecords.length} manual records
-                  </div>
-                </div>
-
-                {/* Table Content */}
-                {filteredManualRecords.length === 0 ? (
-                  <div className="p-12 text-center space-y-3">
-                    <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto">
-                      <UserPlus className="w-6 h-6" />
-                    </div>
-                    <div className="space-y-1">
-                      <h4 className="text-sm font-extrabold text-slate-900">
-                        {manualSearch ? 'No matching manual records found' : 'No manual identifiers added yet'}
-                      </h4>
-                      <p className="text-xs text-slate-500 max-w-sm mx-auto">
-                        {manualSearch
-                          ? 'Try adjusting your search keywords.'
-                          : 'Click "+ Add Hunter Identifier Manually" to register the first manual reference record.'}
-                      </p>
-                    </div>
-                    {!manualSearch && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditingManualRecord(null);
-                          setIsAddRecordModalOpen(true);
-                        }}
-                        className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm transition-colors cursor-pointer"
-                      >
-                        <PlusCircle className="w-4 h-4" />
-                        <span>Add First Record</span>
-                      </button>
-                    )}
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse text-xs">
-                      <thead>
-                        <tr className="bg-slate-100/80 border-b border-slate-200 text-[11px] font-bold text-slate-600 uppercase tracking-wider">
-                          <th className="py-3 px-4">Hunter Identifier</th>
-                          <th className="py-3 px-4">Bank / NBFC Name</th>
-                          <th className="py-3 px-4">Approval State</th>
-                          <th className="py-3 px-4 text-right">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-200">
-                        {paginatedManualRecords.map((item) => {
-                          const isApproved = item.approvalStatus === 'approved' || !item.approvalStatus;
-                          const isPending = item.approvalStatus === 'pending';
-                          const isRejected = item.approvalStatus === 'rejected';
-
-                          return (
-                            <tr key={item.id} className="hover:bg-slate-50/80 transition-colors">
-                              {/* Identifier */}
-                              <td className="py-3.5 px-4 font-mono font-bold text-slate-900 text-xs">
-                                {item.hunterId}
-                              </td>
-
-                              {/* Bank Name */}
-                              <td className="py-3.5 px-4">
-                                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-50/60 border border-indigo-100 text-indigo-950 font-bold text-xs">
-                                  <Building2 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                                  <span>{item.bankName}</span>
-                                </div>
-                              </td>
-
-                              {/* Approval State */}
-                              <td className="py-3.5 px-4">
-                                {isApproved && (
-                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                                    <CheckCircle className="w-3 h-3 text-emerald-600" />
-                                    Live Search
-                                  </span>
-                                )}
-                                {isPending && (
-                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-extrabold bg-amber-100 text-amber-900 border border-amber-300 animate-pulse">
-                                    <Clock className="w-3 h-3 text-amber-600" />
-                                    Pending Review
-                                  </span>
-                                )}
-                                {isRejected && (
-                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-extrabold bg-rose-100 text-rose-800 border border-rose-200">
-                                    <X className="w-3 h-3 text-rose-600" />
-                                    Rejected
-                                  </span>
-                                )}
-                              </td>
-
-                              {/* Actions: Edit & Delete */}
-                              <td className="py-3.5 px-4 text-right whitespace-nowrap">
-                                <div className="flex items-center justify-end gap-1.5">
-                                  <button
-                                    id={`edit-manual-record-${item.id}`}
-                                    type="button"
-                                    onClick={() => {
-                                      setEditingManualRecord(item);
-                                      setIsAddRecordModalOpen(true);
-                                    }}
-                                    className="p-1.5 rounded-lg bg-slate-100 hover:bg-indigo-50 hover:text-indigo-700 text-slate-600 transition-colors inline-flex items-center gap-1 text-[11px] font-bold cursor-pointer"
-                                    title="Edit Manual Identifier"
-                                  >
-                                    <Edit3 className="w-3.5 h-3.5" />
-                                    <span>Edit</span>
-                                  </button>
-
-                                  <button
-                                    id={`delete-manual-record-${item.id}`}
-                                    type="button"
-                                    onClick={() => {
-                                      if (
-                                        window.confirm(
-                                          `Are you sure you want to delete Hunter Identifier "${item.hunterId}" (${item.bankName})? This will immediately remove it from the active search database for all users.`
-                                        )
-                                      ) {
-                                        onDeleteManualRecord?.(item.id);
-                                      }
-                                    }}
-                                    className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 transition-colors inline-flex items-center gap-1 text-[11px] font-bold cursor-pointer"
-                                    title="Delete from Central Database"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5 text-rose-600" />
-                                    <span>Delete</span>
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-
-                {/* Pagination */}
-                {totalManualPages > 1 && (
-                  <div className="p-3 border-t border-slate-200 bg-slate-50/50 flex items-center justify-between text-xs">
-                    <span className="text-slate-500">
-                      Page {manualPage} of {totalManualPages}
-                    </span>
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        disabled={manualPage === 1}
-                        onClick={() => setManualPage((p) => Math.max(1, p - 1))}
-                        className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-slate-700 disabled:opacity-40 font-semibold cursor-pointer"
-                      >
-                        Previous
-                      </button>
-                      <button
-                        type="button"
-                        disabled={manualPage === totalManualPages}
-                        onClick={() => setManualPage((p) => Math.min(totalManualPages, p + 1))}
-                        className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-slate-700 disabled:opacity-40 font-semibold cursor-pointer"
-                      >
-                        Next
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
+              {/* Table / Records View Card with Checkbox Selection and Bulk Deletion */}
+              {renderIdentifierTable()}
             </div>
           )}
 
@@ -1603,234 +1823,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 )}
               </div>
 
-              {/* Data Table Preview Section */}
-              <div className="bg-white rounded-2xl border border-slate-200/90 shadow-xs overflow-hidden">
-                <div className="p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div>
-                    <h3 className="text-sm font-extrabold text-slate-900 uppercase tracking-wider flex items-center gap-2">
-                      <span>CSV Records Preview</span>
-                      <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-700">
-                        {filteredPreviewRecords.length.toLocaleString()} matching records
+              {/* CSV LIVE IDENTIFIER MANAGEMENT (SELECT & DELETE) */}
+              <div className="bg-white p-6 rounded-2xl border border-slate-200/90 shadow-xs space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-base font-extrabold text-slate-900 tracking-tight flex items-center gap-2">
+                        <Database className="w-4 h-4 text-indigo-600" />
+                        <span>Live Identifiers Selection & Deletion</span>
+                      </h3>
+                      <span className="text-xs font-extrabold px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
+                        {unifiedLiveRecords.length} Live Records
                       </span>
-                    </h3>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      Previewing records currently loaded in the active Hunter Search database
-                    </p>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2.5">
-                    {/* Add Manual Record Button */}
-                    <button
-                      id="admin-add-record-btn-table"
-                      type="button"
-                      onClick={() => setIsAddRecordModalOpen(true)}
-                      className="py-1.5 px-3 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
-                      title="Add a new Hunter Identifier manually"
-                    >
-                      <PlusCircle className="w-3.5 h-3.5" />
-                      <span>+ Add Record</span>
-                    </button>
-
-                    {/* Table search filter */}
-                    <div className="relative">
-                      <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                      <input
-                        type="text"
-                        value={previewSearch}
-                        onChange={(e) => {
-                          setPreviewSearch(e.target.value);
-                          setPreviewPage(1);
-                        }}
-                        placeholder="Filter preview table..."
-                        className="pl-8 pr-3 py-1.5 text-xs bg-slate-50 rounded-lg border border-slate-200 focus:bg-white focus:border-indigo-600 outline-hidden w-40 sm:w-48"
-                      />
                     </div>
-
-                    <button
-                      type="button"
-                      onClick={handleDownloadOverallIdentifierDetails}
-                      disabled={!hasData && (!liveIdentifiers || liveIdentifiers.length === 0)}
-                      className="py-1.5 px-2.5 rounded-lg bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 text-xs font-bold border border-slate-200 transition-colors flex items-center gap-1 cursor-pointer"
-                      title="Download complete current Hunter Identifier dataset from Cloud Firestore as CSV"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      <span className="hidden sm:inline">Export Overall CSV</span>
-                    </button>
+                    <p className="text-xs text-slate-500 max-w-2xl leading-relaxed">
+                      Select specific records using checkboxes to delete them directly from the Cloud Firestore <code>live_identifiers</code> collection.
+                    </p>
                   </div>
                 </div>
 
-                {/* Table */}
-                {paginatedPreviewRecords.length > 0 ? (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs">
-                      <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
-                        <tr>
-                          <th className="py-3 px-4 w-12">#</th>
-                          <th className="py-3 px-4">Hunter Identifier Number</th>
-                          <th className="py-3 px-4">Bank / NBFC Name</th>
-                          <th className="py-3 px-4">Entity & Reference Info</th>
-                          <th className="py-3 px-4">Status / Alert</th>
-                          {onDeleteRecord && <th className="py-3 px-4 text-right w-16">Action</th>}
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 text-slate-700">
-                        {paginatedPreviewRecords.map((record, index) => {
-                          const rowIndex = (previewPage - 1) * rowsPerPage + index + 1;
-                          const isManual =
-                            record.id.startsWith('manual-') ||
-                            record.status?.includes('MANUAL') ||
-                            Boolean(record.uploadedBy);
-
-                          return (
-                            <tr key={record.id || index} className="hover:bg-slate-50/80 transition-colors">
-                              <td className="py-3 px-4 font-mono text-slate-400">{rowIndex}</td>
-                              <td className="py-3 px-4">
-                                <div className="flex items-center gap-2">
-                                  <span className="font-mono font-bold text-indigo-700">
-                                    {record.hunterId || record.name}
-                                  </span>
-                                  {isManual && (
-                                    <span className="px-1.5 py-0.2 rounded text-[9px] font-extrabold bg-indigo-50 text-indigo-700 border border-indigo-200">
-                                      Manual
-                                    </span>
-                                  )}
-                                </div>
-                              </td>
-                              <td className="py-3 px-4 font-semibold text-slate-900">
-                                {record.bankName || '—'}
-                              </td>
-                              <td className="py-3 px-4 text-slate-600">
-                                <div className="space-y-0.5">
-                                  {record.name && record.name !== record.hunterId && (
-                                    <div className="font-medium text-slate-800 truncate max-w-[180px]">
-                                      {record.name}
-                                    </div>
-                                  )}
-                                  <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500 font-mono">
-                                    {record.pan && <span>PAN: {maskGenericNumber(record.pan)}</span>}
-                                    {record.accountNumber && <span>A/C: {maskGenericNumber(record.accountNumber)}</span>}
-                                    {record.mobile && <span>Ph: {maskGenericNumber(record.mobile)}</span>}
-                                    {!record.pan && !record.accountNumber && !record.mobile && (
-                                      <span className="text-slate-400">—</span>
-                                    )}
-                                  </div>
-                                </div>
-                              </td>
-                              <td className="py-3 px-4">
-                                <span
-                                  className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold ${
-                                    record.status?.includes('FRAUD')
-                                      ? 'bg-red-50 text-red-700 border border-red-200'
-                                      : record.status?.includes('RCU')
-                                      ? 'bg-rose-50 text-rose-700 border border-rose-200'
-                                      : record.status?.includes('ALERT') || record.status?.includes('SUSPECT')
-                                      ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                                      : 'bg-slate-100 text-slate-700'
-                                  }`}
-                                >
-                                  {record.status || 'Active Reference'}
-                                </span>
-                              </td>
-                              {onDeleteRecord && (
-                                <td className="py-3 px-4 text-right">
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      if (
-                                        window.confirm(
-                                          `Delete record "${record.hunterId || record.name}" from the active database?`
-                                        )
-                                      ) {
-                                        onDeleteRecord(record.id);
-                                      }
-                                    }}
-                                    className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                                    title="Delete this record"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
-                                </td>
-                              )}
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <div className="py-12 text-center text-slate-500 space-y-2">
-                    <Database className="w-8 h-8 text-slate-300 mx-auto" />
-                    <p className="text-xs font-semibold text-slate-600">
-                      {records.length === 0
-                        ? 'No CSV records loaded. Upload a CSV file or load demo data.'
-                        : 'No records matching your preview filter.'}
-                    </p>
-                  </div>
-                )}
-
-                {/* Pagination Controls */}
-                {filteredPreviewRecords.length > 0 && (
-                  <div className="p-4 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-600">
-                    <div className="flex items-center gap-2">
-                      <span>Showing {((previewPage - 1) * rowsPerPage) + 1} to {Math.min(previewPage * rowsPerPage, filteredPreviewRecords.length)} of {filteredPreviewRecords.length} records</span>
-                      <select
-                        value={rowsPerPage}
-                        onChange={(e) => {
-                          setRowsPerPage(Number(e.target.value));
-                          setPreviewPage(1);
-                        }}
-                        className="ml-2 px-2 py-1 bg-slate-50 border border-slate-200 rounded-md text-xs"
-                      >
-                        <option value={10}>10 rows</option>
-                        <option value={15}>15 rows</option>
-                        <option value={25}>25 rows</option>
-                        <option value={50}>50 rows</option>
-                      </select>
-                    </div>
-
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => setPreviewPage(1)}
-                        disabled={previewPage === 1}
-                        className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
-                        title="First Page"
-                      >
-                        <ChevronsLeft className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setPreviewPage((p) => Math.max(1, p - 1))}
-                        disabled={previewPage === 1}
-                        className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
-                        title="Previous Page"
-                      >
-                        <ChevronLeft className="w-3.5 h-3.5" />
-                      </button>
-                      <span className="px-3 py-1 font-bold text-slate-800">
-                        {previewPage} / {totalPreviewPages}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setPreviewPage((p) => Math.min(totalPreviewPages, p + 1))}
-                        disabled={previewPage === totalPreviewPages}
-                        className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
-                        title="Next Page"
-                      >
-                        <ChevronRight className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setPreviewPage(totalPreviewPages)}
-                        disabled={previewPage === totalPreviewPages}
-                        className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
-                        title="Last Page"
-                      >
-                        <ChevronsRight className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                )}
+                {renderIdentifierTable()}
               </div>
             </div>
           )}
@@ -1973,6 +1985,144 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               </div>
 
+              {/* Change Password Section (Admin Profile / Admin Settings) */}
+              <div id="admin-change-password-section" className="bg-white p-6 rounded-2xl border border-slate-200/90 shadow-xs space-y-5">
+                <div className="border-b border-slate-100 pb-4">
+                  <h2 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
+                    <KeyRound className="w-5 h-5 text-indigo-600" />
+                    <span>Change Password</span>
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Securely update administrator credentials using Firebase Authentication
+                  </p>
+                </div>
+
+                <form onSubmit={handleChangePassword} className="space-y-4 max-w-lg">
+                  {passwordChangeSuccess && (
+                    <div
+                      id="password-change-success-alert"
+                      className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-xs font-bold text-emerald-800 flex items-center gap-2"
+                    >
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>{passwordChangeSuccess}</span>
+                    </div>
+                  )}
+
+                  {passwordChangeError && (
+                    <div
+                      id="password-change-error-alert"
+                      className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-xs font-bold text-rose-800 flex items-center gap-2"
+                    >
+                      <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                      <span>{passwordChangeError}</span>
+                    </div>
+                  )}
+
+                  {/* Current Password Field */}
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-bold text-slate-700">
+                      Current Password
+                    </label>
+                    <div className="relative">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                        <Lock className="w-4 h-4" />
+                      </div>
+                      <input
+                        id="current-password-input"
+                        type={showCurrentPassword ? 'text' : 'password'}
+                        value={currentPassword}
+                        onChange={(e) => setCurrentPassword(e.target.value)}
+                        placeholder="Enter Current Password"
+                        autoComplete="current-password"
+                        required
+                        className="w-full pl-9 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:bg-white focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600 outline-hidden transition-all"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowCurrentPassword(!showCurrentPassword)}
+                        className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
+                        title={showCurrentPassword ? 'Hide password' : 'Show password'}
+                      >
+                        {showCurrentPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* New Password Field */}
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-bold text-slate-700">
+                      New Password
+                    </label>
+                    <div className="relative">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                        <Lock className="w-4 h-4" />
+                      </div>
+                      <input
+                        id="new-password-input"
+                        type={showNewPassword ? 'text' : 'password'}
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        placeholder="Enter New Password"
+                        autoComplete="new-password"
+                        required
+                        className="w-full pl-9 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:bg-white focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600 outline-hidden transition-all"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowNewPassword(!showNewPassword)}
+                        className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
+                        title={showNewPassword ? 'Hide password' : 'Show password'}
+                      >
+                        {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Confirm New Password Field */}
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-bold text-slate-700">
+                      Confirm New Password
+                    </label>
+                    <div className="relative">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                        <Lock className="w-4 h-4" />
+                      </div>
+                      <input
+                        id="confirm-new-password-input"
+                        type={showConfirmPassword ? 'text' : 'password'}
+                        value={confirmNewPassword}
+                        onChange={(e) => setConfirmNewPassword(e.target.value)}
+                        placeholder="Confirm New Password"
+                        autoComplete="new-password"
+                        required
+                        className="w-full pl-9 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:bg-white focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600 outline-hidden transition-all"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                        className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
+                        title={showConfirmPassword ? 'Hide password' : 'Show password'}
+                      >
+                        {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Submit Button */}
+                  <div className="pt-2">
+                    <button
+                      id="change-password-submit-btn"
+                      type="submit"
+                      disabled={isChangingPassword || !currentPassword || !newPassword || !confirmNewPassword}
+                      className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-bold shadow-sm transition-all flex items-center gap-2 cursor-pointer disabled:cursor-not-allowed"
+                    >
+                      <KeyRound className="w-4 h-4" />
+                      <span>{isChangingPassword ? 'Changing Password...' : 'Change Password'}</span>
+                    </button>
+                  </div>
+                </form>
+              </div>
+
               {/* System Configuration */}
               <div className="bg-white p-6 rounded-2xl border border-slate-200/90 shadow-xs space-y-5">
                 <div className="border-b border-slate-100 pb-4">
@@ -2019,6 +2169,70 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           )}
         </div>
       </div>
+
+      {/* Confirmation Dialog for Bulk Delete (Admin Exclusive) */}
+      {isBulkDeleteModalOpen && (
+        <div
+          id="admin-bulk-delete-confirmation-dialog"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150"
+        >
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-5 animate-in zoom-in-95 duration-150">
+            <div className="flex items-start gap-3.5">
+              <div className="w-11 h-11 rounded-2xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center shrink-0">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-base font-extrabold text-slate-900">
+                  Delete Selected Identifiers?
+                </h3>
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  Are you sure you want to delete the selected identifier(s)?
+                </p>
+              </div>
+            </div>
+
+            <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5 text-xs">
+              <div className="flex items-center justify-between font-bold text-slate-800">
+                <span>Selected identifiers:</span>
+                <span className="font-mono text-indigo-700 bg-indigo-50 px-2.5 py-1 rounded-md border border-indigo-200 text-sm font-extrabold">
+                  {selectedRecordIds.size}
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-600 leading-relaxed pt-1.5 border-t border-slate-200">
+                You have selected <strong>{selectedRecordIds.size}</strong> identifier(s) for permanent deletion from the Firebase Firestore <code>live_identifiers</code> collection.
+              </p>
+              <div className="p-2 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-[11px] font-semibold flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
+                <span>Once confirmed, records immediately disappear from Hunter Search results in real-time.</span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
+              <button
+                id="admin-bulk-delete-cancel-btn"
+                type="button"
+                disabled={isDeletingBulk}
+                onClick={() => setIsBulkDeleteModalOpen(false)}
+                className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 hover:bg-slate-100 font-bold text-xs transition-colors cursor-pointer disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                id="admin-bulk-delete-confirm-btn"
+                type="button"
+                disabled={isDeletingBulk}
+                onClick={handleConfirmBulkDelete}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white font-extrabold text-xs shadow-md shadow-rose-600/20 transition-all cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>
+                  {isDeletingBulk ? 'Deleting...' : `Delete ${selectedRecordIds.size} Identifiers`}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Manual Hunter Record Addition / Editing Modal (Admin Only) */}
       <AddManualRecordModal
