@@ -91,13 +91,14 @@ export default function App() {
 
   const [isProfileModalOpen, setIsProfileModalOpen] = useState<boolean>(false);
 
-  // Subscribe to Day-Wise Visitor Statistics (for Admin Dashboard)
+  // Subscribe to Day-Wise Visitor Statistics (for Admin Dashboard when authenticated)
   useEffect(() => {
+    if (!adminSession?.isAuthenticated) return;
     const unsubscribeDaily = subscribeToDailyVisitorStats((stats) => {
       setDailyVisitorStats(stats);
     });
     return () => unsubscribeDaily();
-  }, []);
+  }, [adminSession?.isAuthenticated]);
 
   // Listen to Firebase Authentication state (Exclusively for Administrator session)
   useEffect(() => {
@@ -259,18 +260,17 @@ export default function App() {
     };
   }, [csvMetadata, combinedRecords.length, combinedUniqueBanks.length]);
 
-  // Real-Time Firebase Firestore Synchronization (Live Master Identifiers, Submissions, Manual Records, Dataset, Visitor Stats)
+  // 1. Public Real-Time Firebase Firestore Synchronization (Live Master Identifiers & Visitor Metrics)
   useEffect(() => {
-    // 1. Ensure Firebase Auth initialization
+    // Ensure Firebase Auth initialization
     initAuth().catch((err) => console.warn('Firebase auth initialization note:', err));
 
-    // 2. Subscribe to Global Live Sync Status
+    // Global Live Sync Status listener
     const unsubscribeSync = subscribeToLiveSyncStatus((status) => {
       setLiveSyncStatus(status);
     });
 
-    // 3. Real-Time Master Listener: Cloud Firestore live_identifiers
-    // Fires instantly for both unauthenticated search users and authenticated admins
+    // Master Public Listener: Cloud Firestore live_identifiers
     const unsubscribeLive = subscribeToLiveIdentifiers(
       (liveDocs, meta) => {
         setLiveIdentifiers(liveDocs);
@@ -283,7 +283,29 @@ export default function App() {
       }
     );
 
-    // 4. Real-Time Submissions Listener: Public contributions queue for Admin approval
+    // Public Visitor Metrics listener
+    const unsubscribeStats = subscribeToVisitorStats((remoteStats) => {
+      if (remoteStats) {
+        setVisitorStats(remoteStats);
+      }
+    });
+
+    // Increment visitor count in Firestore
+    const { isNew } = getOrCreateVisitorId();
+    incrementVisitorStatsInFirestore(isNew).catch(() => {});
+
+    return () => {
+      unsubscribeSync();
+      unsubscribeLive();
+      unsubscribeStats();
+    };
+  }, []);
+
+  // 2. Administrator-Only Real-Time Listeners (Active exclusively when Administrator is authenticated)
+  useEffect(() => {
+    if (!adminSession?.isAuthenticated) return;
+
+    // Submissions Queue Listener
     const unsubscribeSubmissions = subscribeToSubmissions((subs, meta) => {
       setSubmissionsList(subs);
       if (meta?.lastSnapshotTime) {
@@ -291,7 +313,7 @@ export default function App() {
       }
     });
 
-    // 5. Real-Time Listener: Manual Hunter Identifiers (Sync & Fallback)
+    // Manual Hunter Identifiers Listener
     const unsubscribeManual = subscribeToManualHunterRecords(
       (remoteRecords) => {
         setManualRecords(remoteRecords);
@@ -301,7 +323,7 @@ export default function App() {
       }
     );
 
-    // 6. Real-Time Listener: Central Active Reference Dataset
+    // Dataset Metadata Listener
     const unsubscribeDataset = subscribeToActiveDataset((data) => {
       if (data && Array.isArray(data.records) && data.metadata) {
         setRecords(data.records);
@@ -313,38 +335,20 @@ export default function App() {
       }
     });
 
-    // 7. Real-Time Listener: Search History Audit Logs
+    // Search History Audit Logs
     const unsubscribeHistory = subscribeToSearchHistory((remoteHistory) => {
       if (remoteHistory && remoteHistory.length > 0) {
         setSearchHistory(remoteHistory);
       }
     });
 
-    // 8. Real-Time Listener: Visitor Metrics
-    const unsubscribeStats = subscribeToVisitorStats((remoteStats) => {
-      if (remoteStats) {
-        setVisitorStats(remoteStats);
-      }
-    });
-
-    // Increment visitor count in Firestore
-    const { isNew } = getOrCreateVisitorId();
-    incrementVisitorStatsInFirestore(isNew).catch(() => {});
-
-    // Seed master live identifiers if database is newly initialized
-    seedLiveIdentifiersIfEmpty().catch(() => {});
-    seedDefaultHunterRecordsIfEmpty().catch(() => {});
-
     return () => {
-      unsubscribeSync();
-      unsubscribeLive();
       unsubscribeSubmissions();
       unsubscribeManual();
       unsubscribeDataset();
       unsubscribeHistory();
-      unsubscribeStats();
     };
-  }, []);
+  }, [adminSession?.isAuthenticated]);
 
 
   // Search History Log
@@ -1570,7 +1574,9 @@ export default function App() {
               <img
                 src={BRAND.shieldIcon}
                 alt="Fraud Risk Hub"
-                className="w-full h-full object-cover"
+                className="w-full h-full object-contain p-0.5"
+                style={{ objectFit: 'contain' }}
+                draggable={false}
                 referrerPolicy="no-referrer"
               />
             </div>

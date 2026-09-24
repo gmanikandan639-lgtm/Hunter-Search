@@ -59,7 +59,9 @@ export const Header: React.FC<HeaderProps> = ({
                 <img
                   src={BRAND.shieldIcon}
                   alt="Fraud Risk Hub Shield Logo"
-                  className="w-full h-full object-cover"
+                  className="w-full h-full object-contain p-0.5"
+                  style={{ objectFit: 'contain' }}
+                  draggable={false}
                   referrerPolicy="no-referrer"
                 />
                 <div className="absolute inset-0 ring-1 ring-inset ring-white/10 rounded-xl pointer-events-none" />

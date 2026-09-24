@@ -182,43 +182,39 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
         className="w-full bg-white rounded-3xl border border-slate-200/90 shadow-2xl shadow-slate-900/10 overflow-hidden grid grid-cols-1 lg:grid-cols-2"
       >
         {/* =============================================================== */}
-        {/* SECTION 1: LEFT SIDE – USER UPLOADED BANNER IMAGE (~50% DESKTOP) */}
+        {/* SECTION 1: LEFT SIDE – ADMIN LOGO / BANNER IMAGE (~50% DESKTOP) */}
         {/* =============================================================== */}
         <div
           id="login-left-image-section"
-          className="relative w-full h-48 sm:h-64 lg:h-auto min-h-[200px] lg:min-h-[620px] bg-slate-950 flex flex-col justify-between overflow-hidden"
+          className="relative w-full h-60 sm:h-80 lg:h-auto min-h-[240px] lg:min-h-[580px] bg-slate-950 flex flex-col items-center justify-center p-4 sm:p-6 lg:p-8 overflow-hidden"
         >
           {BRAND.loginBanner ? (
-            <img
-              id="login-banner-image"
-              src={BRAND.loginBanner}
-              alt="Fraud Risk Hub Banner"
-              className="w-full h-full object-cover object-center transition-transform duration-700 hover:scale-105"
-              referrerPolicy="no-referrer"
-            />
+            <div className="w-full h-full flex items-center justify-center p-2">
+              <img
+                id="login-banner-image"
+                src={BRAND.loginBanner}
+                alt="Fraud Risk Hub Banner Logo"
+                className="max-w-full max-h-full w-auto h-auto object-contain object-center rounded-xl shadow-lg transition-transform duration-300"
+                style={{ objectFit: 'contain' }}
+                draggable={false}
+                referrerPolicy="no-referrer"
+              />
+            </div>
           ) : (
             <div className="w-full h-full flex flex-col items-center justify-center p-8 bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 text-white text-center">
               <div className="w-16 h-16 rounded-2xl bg-indigo-950 border border-indigo-700 p-2 flex items-center justify-center mb-4">
-                <img src={BRAND.shieldIcon} alt="Shield" className="w-full h-full object-cover" />
+                <img
+                  src={BRAND.shieldIcon}
+                  alt="Shield"
+                  className="w-full h-full object-contain"
+                  style={{ objectFit: 'contain' }}
+                  draggable={false}
+                />
               </div>
               <h3 className="text-lg font-black tracking-tight">{BRAND.name}</h3>
               <p className="text-xs text-slate-400 mt-1">{BRAND.tagline}</p>
             </div>
           )}
-
-          {/* Visual gradient overlay for clean integration */}
-          <div className="absolute inset-0 bg-gradient-to-t from-slate-950/85 via-transparent to-slate-950/20 pointer-events-none" />
-
-          {/* Desktop & Tablet Lower Caption Badge */}
-          <div className="absolute bottom-4 left-4 right-4 z-10 hidden sm:flex items-center justify-between text-white/95 backdrop-blur-md bg-slate-950/75 py-2.5 px-4 rounded-2xl border border-white/15 text-[11px] shadow-lg">
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="font-extrabold tracking-wide">Enterprise Fraud Prevention</span>
-            </div>
-            <span className="text-slate-300 text-[10px] font-mono tracking-wider font-semibold">
-              DETECT • ANALYZE • PREVENT
-            </span>
-          </div>
         </div>
 
         {/* =============================================================== */}
@@ -230,11 +226,13 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
         >
           {/* Branding Header */}
           <div className="text-center space-y-2">
-            <div className="mx-auto w-14 h-14 rounded-2xl overflow-hidden bg-slate-950 border border-slate-800 shadow-lg shadow-indigo-950/40 p-1 flex items-center justify-center">
+            <div className="mx-auto w-14 h-14 rounded-2xl overflow-hidden bg-slate-950 border border-slate-800 shadow-lg shadow-indigo-950/40 p-2 flex items-center justify-center">
               <img
                 src={BRAND.shieldIcon}
                 alt="Fraud Risk Hub Logo"
-                className="w-full h-full object-cover rounded-xl"
+                className="max-w-full max-h-full w-auto h-auto object-contain rounded-lg"
+                style={{ objectFit: 'contain' }}
+                draggable={false}
                 referrerPolicy="no-referrer"
               />
             </div>

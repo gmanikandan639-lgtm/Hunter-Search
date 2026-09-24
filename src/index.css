@@ -66,3 +66,89 @@
   z-index: 0;
 }
 
+/* ============================================================ */
+/* CONTENT PROTECTION & ANTI-COPY SYSTEM                        */
+/* ============================================================ */
+
+/* Best-effort protection: disable text selection and dragging across the app */
+html,
+body,
+#root,
+div,
+span,
+p,
+a,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+table,
+thead,
+tbody,
+tr,
+th,
+td,
+ul,
+ol,
+li,
+header,
+footer,
+section,
+article,
+aside,
+nav,
+main {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+  -webkit-user-drag: none;
+  user-drag: none;
+}
+
+/* Ensure images cannot be dragged or selected */
+img {
+  -webkit-user-drag: none !important;
+  -khtml-user-drag: none !important;
+  -moz-user-drag: none !important;
+  -o-user-drag: none !important;
+  user-drag: none !important;
+  -webkit-user-select: none !important;
+  user-select: none !important;
+  pointer-events: auto;
+}
+
+/* Explicitly preserve full usability for inputs, textareas and editable fields */
+input,
+textarea,
+[contenteditable="true"],
+input:focus,
+textarea:focus {
+  -webkit-user-select: text !important;
+  -moz-user-select: text !important;
+  -ms-user-select: text !important;
+  user-select: text !important;
+  -webkit-user-drag: auto !important;
+  user-drag: auto !important;
+}
+
+/* Buttons and interactive controls remain clickable and accessible */
+button,
+[role="button"] {
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: pointer;
+}
+
+/* Print protection: hide application content when printing or saving as PDF */
+@media print {
+  html,
+  body {
+    display: none !important;
+    visibility: hidden !important;
+  }
+}
+
+

@@ -20,8 +20,6 @@ import {
 import {
   getFirestore,
   initializeFirestore,
-  persistentLocalCache,
-  persistentMultipleTabManager,
   Firestore,
   collection,
   doc,
@@ -31,6 +29,7 @@ import {
   deleteDoc,
   getDoc,
   getDocs,
+  getDocFromServer,
   writeBatch,
   query,
   where,
@@ -138,10 +137,7 @@ googleProvider.setCustomParameters({ prompt: 'select_account' });
 let firestoreInstance: Firestore;
 try {
   const firestoreSettings = {
-    experimentalAutoDetectLongPolling: true,
-    localCache: persistentLocalCache({
-      tabManager: persistentMultipleTabManager(),
-    }),
+    experimentalForceLongPolling: true,
   };
 
   if (isFirebaseConfigured && customDatabaseId && customDatabaseId !== '(default)') {
@@ -150,7 +146,6 @@ try {
     firestoreInstance = initializeFirestore(app, firestoreSettings);
   }
 } catch (err) {
-  console.warn('Initializing with custom settings failed, falling back to getFirestore:', err);
   try {
     firestoreInstance = customDatabaseId && customDatabaseId !== '(default)'
       ? getFirestore(app, customDatabaseId)
@@ -161,6 +156,20 @@ try {
 }
 
 export const db: Firestore = firestoreInstance;
+
+// Validate Connection to Firestore (Firebase Skill Requirement)
+export async function testConnection(): Promise<void> {
+  try {
+    await getDocFromServer(doc(db, 'test', 'connection'));
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.warn('Firestore offline status note: please verify internet connection.');
+    }
+  }
+}
+if (typeof window !== 'undefined') {
+  testConnection().catch(() => {});
+}
 
 // Authentication helper: Google Sign-In Exclusively
 export const signInWithGoogle = async (): Promise<FirebaseUser> => {
